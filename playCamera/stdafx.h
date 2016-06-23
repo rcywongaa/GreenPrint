@@ -14,6 +14,7 @@
 
 // TODO: reference additional headers your program requires here
 
+#include <cstdio>
 #include <iostream>
 #include <stdlib.h>
 #include <omp.h>
@@ -28,6 +29,8 @@
 #include <mmdeviceapi.h>
 #include <endpointvolume.h>
 #include <iomanip>
+#include <thread>
+#include <mutex>
 #include "FlyCapture2.h"
 
 using namespace std;
@@ -45,3 +48,32 @@ using namespace FlyCapture2;
 #define cimg_plugin1 "cvMat.h"
 #include "pHash.h"
 #pragma comment(lib, "pHash.lib")
+
+enum Room {DINING, LIVING, STUDY, UNDEFINED};
+
+struct RoomPhotos
+{
+	CImg<uchar>img;
+	double score;
+	Room  room;
+};
+
+struct Texture {
+	cv::Scalar color;
+	cv::Mat image;
+	vector<cv::KeyPoint> keypoints;
+	cv::Mat descriptors;
+	int max_instances;
+	int type;
+};
+
+struct ColorRect {
+	cv::RotatedRect rect;
+	cv::Scalar color;
+};
+
+string getString(Room room);
+vector<cv::Point2f> getROIPts2f();
+string getCurrentTime();
+int CheckError(Error error);
+void PrintError(Error error);

@@ -3,21 +3,20 @@
 
 /*
 TODO:
-Capture backgrounds under different lighting conditions
+Test update background image / Capture backgrounds under different lights
+Test handle occlusion
+Zoom / ROI from camera image
+ROI for tracking
 New training layouts
+Test delete old records
 */
+
+#define COLOR
+//#define SAVE
 
 #include "stdafx.h"
 #include "CmFile.h"
-
-
-
-struct RoomPhotos
-{
-	CImg<uchar>img;
-	double score;
-	string  type;
-};
+#include "SoundController.h"
 
 void PrintBuildInfo()
 {
@@ -56,25 +55,11 @@ void PrintFormat7Capabilities( Format7Info fmt7Info )
 	
 }
 
-void PrintError( Error error )
-{
-    error.PrintErrorTrace();
-}
-
-void CheckError( Error error ){
-	if (error != PGRERROR_OK)
-    {
-		//Ignore image consistency error for now...
-        //PrintError( error );
-        //exit(-1);
-    }
-}
-
 void show(string window, cv::Mat img)
 {
 	cv::Mat resized;
-	//cv::resize(img, resized, cv::Size(320, 240));
-	cv::resize(img, resized, cv::Size(640, 480));
+	cv::resize(img, resized, cv::Size(320, 240));
+	//cv::resize(img, resized, cv::Size(640, 480));
 	imshow(window, resized);
 }
 
@@ -86,19 +71,9 @@ double cosAngle(cv::Point pt1, cv::Point pt2, cv::Point pt0 )
     double dy2 = pt2.y - pt0.y;
     return (dx1*dx2 + dy1*dy2)/sqrt((dx1*dx1 + dy1*dy1)*(dx2*dx2 + dy2*dy2) + 1e-10);
 }
-
-struct Texture {
-	cv::Scalar color;
-	cv::Mat image;
-	vector<cv::KeyPoint> keypoints;
-	cv::Mat descriptors;
-	int max_instances;
-	int type;
-};
-
-cv::Mat findTexture(cv::Mat input, vector<Texture> textures)
+	 
+vector<ColorRect> findTexture(cv::Mat input, vector<Texture> textures)
 {
-	/********** Feature detection to identify box **********/
 	cv::Mat texFrame = cv::Mat::zeros(input.size(), CV_8UC3);
 	int num_types = textures.size();
 	vector<cv::KeyPoint> keypoints;
@@ -109,7 +84,7 @@ cv::Mat findTexture(cv::Mat input, vector<Texture> textures)
 	cv::Ptr<cv::DescriptorMatcher> p_matcher = cv::DescriptorMatcher::create("BruteForce-Hamming");
 	p_orb->detectAndCompute(input, cv::Mat(), keypoints, descriptors);
 	int min_dist = 1e5;
-	//TODO: Deal with multiple object detection
+	vector<ColorRect> color_rects;
 	for (int type = 0; type < num_types; type++)
 	{
 		vector<vector<cv::DMatch>> this_matches;
@@ -129,14 +104,13 @@ cv::Mat findTexture(cv::Mat input, vector<Texture> textures)
 		}
 		if (get<0>(matched_keypoints[type]).size() < 4)
 		{
-			cout << "Not enough matches: " << type << endl;
+			//cout << "Not enough matches: " << type << endl;
 			continue;
 		}
 		cv::Mat matchFrame;
 		cv::drawMatches(input, get<0>(matched_keypoints[type]), textures[type].image, get<1>(matched_keypoints[type]), good_matches, matchFrame);
-		show("match - " + to_string(type), matchFrame);
+		//show("match - " + to_string(type), matchFrame);
 		//TODO: partition?
-		//TODO: clustering
 		vector<tuple<vector<cv::Point2f>, vector<cv::Point2f>>> clusters(textures[type].max_instances);
 		vector<int> labels;
 		vector<cv::Point2f> cluster_pts;
@@ -165,7 +139,6 @@ cv::Mat findTexture(cv::Mat input, vector<Texture> textures)
 			vector<cv::Point2f> object_bb;					 
 			int width = textures[type].image.cols;
 			int height = textures[type].image.rows;
-			cout << width << ", " << height << endl;
 			vector<cv::Point2f> tex_bb;
 			tex_bb.push_back(cv::Point2f(0, 0));
 			tex_bb.push_back(cv::Point2f(width, 0));
@@ -174,8 +147,8 @@ cv::Mat findTexture(cv::Mat input, vector<Texture> textures)
 			if (!homography.empty())
 			{
 				cv::perspectiveTransform(tex_bb, object_bb, homography);
-				cout << homography << endl;
-				cout << object_bb << endl;
+				//cout << homography << endl;
+				//cout << object_bb << endl;
 				assert(object_bb.size() == 4);
 				cv::Point pts[4];
 				for (int i = 0; i < 4; i++)
@@ -192,59 +165,66 @@ cv::Mat findTexture(cv::Mat input, vector<Texture> textures)
 				{
 					cv::fillConvexPoly(homoFrame, pts, 4, textures[type].color);
 					cv::fillConvexPoly(texFrame, pts, 4, textures[type].color);
+					ColorRect color_rect;
+					color_rect.rect = cv::RotatedRect(cv::Point2f(pts[0]), cv::Point2f(pts[1]), cv::Point2f(pts[2]));
+					color_rect.color = textures[type].color;
+					color_rects.push_back(color_rect);
 				}
-				else
-					cout << "Bad homography matrix" << endl;
+				// else cout << "Bad homography matrix" << endl;
 			}
-			else
-				cout << "Homography failed" << endl;
+			//else cout << "Homography failed" << endl;
 		}
-		show("cluster - " + to_string(type), clusterFrame);
-		show("homo - " + to_string(type), homoFrame);
+		//show("cluster - " + to_string(type), clusterFrame);
+		//show("homo - " + to_string(type), homoFrame);
 	}
 	show("tex", texFrame);
-	return texFrame;
+	return color_rects;
 }
 
-cv::Mat findRect(cv::Mat input, cv::Mat background)
+vector<ColorRect> findRect(cv::Mat input, cv::Mat background)
 {
 	if (background.size() != input.size())
 	{
-		cout << "Warning: Auto-resizing background" << endl;
+		cout << "Warning: Auto-resizing background to " << input.size() << endl;
 		cv::resize(background, background, input.size());
 	}
 	show("input", input);
 	show("background", background);
 	cv::Mat filteredFrame;
-	//TODO: Perhaps use absdiff?
-	cv::subtract(input, background, filteredFrame);
-	filteredFrame = cv::abs(filteredFrame);
+
+	//TODO: Perhaps use absdiff
+
+	//cv::subtract(input, background, filteredFrame);
+	//filteredFrame = cv::abs(filteredFrame);
+	cv::absdiff(input, background, filteredFrame);
 	show("subtracted", filteredFrame);
 
 	//cv::threshold(filteredFrame, filteredFrame, 100, 255, CV_THRESH_BINARY); //Emphasize all edges
 	cv::medianBlur(filteredFrame, filteredFrame, 11);
-	cv::adaptiveThreshold(filteredFrame, filteredFrame, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 11, -10);
+	cv::adaptiveThreshold(filteredFrame, filteredFrame, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 13, -1);
+	//TODO: Consider erode + dilate
 	show("filtered", filteredFrame);
 
 	cv::Mat edgeFrame;
 	cv::Canny(filteredFrame, edgeFrame, 0, 300, 3, true);
-	int DILATE_SIZE = 5;
+	int DILATE_SIZE = 3;
 	//cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3), cv::Point(1, 1));
 	cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(DILATE_SIZE, DILATE_SIZE), cv::Point(DILATE_SIZE / 2, DILATE_SIZE / 2));
 	cv::dilate(edgeFrame, edgeFrame, element); // Fill holes in contours
-	//TODO: Do line thinning here
+	//TODO: Do line thinning here?
 	show("edges", edgeFrame);
 
 	vector<vector<cv::Point>> contours;
 	vector<cv::Vec4i> contour_hierarchy;
+	//cv::findContours(edgeFrame, contours, contour_hierarchy, CV_RETR_LIST, CV_CHAIN_APPROX_NONE);
 	cv::findContours(edgeFrame, contours, contour_hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
 	cv::Mat contourFrame = cv::Mat::zeros(input.size(), input.type());
 	cv::drawContours(contourFrame, contours, -1, cv::Scalar(255, 255, 255));
 	show("contours", contourFrame);
 
 	cv::Mat rectFrame = cv::Mat::zeros(input.size(), input.type());
-	//cout << contours.size() << endl;
 	cv::Mat polyFrame = cv::Mat::zeros(input.size(), input.type());
+	vector<ColorRect> color_rects;
 	for (auto contour : contours)
 	{
 		vector<cv::Point> polygon;
@@ -277,8 +257,11 @@ cv::Mat findRect(cv::Mat input, cv::Mat background)
 					rect.points(pts2f);
 					cv::Point pts[4];
 					for (int i = 0; i < 4; i++) pts[i] = pts2f[i];
-					//TODO: Choose fill color according to furniture type
 					cv::fillConvexPoly(rectFrame, &pts[0], 4, cv::Scalar(255, 255, 255));
+					ColorRect color_rect;
+					color_rect.rect = rect;
+					color_rect.color = cv::Scalar(255, 255, 255);
+					color_rects.push_back(color_rect);
 				}
 			}
 		}
@@ -286,13 +269,99 @@ cv::Mat findRect(cv::Mat input, cv::Mat background)
 	show("polygon", polyFrame);
 	show("rect", rectFrame);
 	//cv::waitKey();
+	return color_rects;
+}
+
+vector<ColorRect> findColor(cv::Mat input, cv::Scalar color1, cv::Scalar color2, cv::Scalar rect_color)
+{
+	bool debug = false;
+	vector<ColorRect> color_rects;
+	if (debug) show("input", input);
+	cv::medianBlur(input, input, 15);
+	if (debug) show("filtered", input);
+	cv::Mat hsv;
+	cv::Mat hsv_array[3];
+	cv::Mat mask;
+	cv::cvtColor(input, hsv, CV_BGR2HSV);
+	cv::split(hsv, hsv_array);
+	if (debug) show("h", hsv_array[0]);
+	if (debug) show("s", hsv_array[1]);
+	if (debug)show("v", hsv_array[2]);
+	cv::inRange(hsv, color1, color2, mask);
+	if (debug) show("mask", mask);
+	cv::dilate(mask, mask, cv::Mat(), cv::Point(-1, -1), 5);
+	cv::erode(mask, mask, cv::Mat(), cv::Point(-1, -1), 15);
+	cv::dilate(mask, mask, cv::Mat(), cv::Point(-1, -1), 10);
+	if (debug) show("dilated_mask", mask);
+
+	vector<vector<cv::Point>> contours;
+	vector<cv::Vec4i> contour_hierarchy;
+	cv::findContours(mask, contours, contour_hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
+	cv::Mat contourFrame = cv::Mat::zeros(input.size(), input.type());
+	cv::drawContours(contourFrame, contours, -1, cv::Scalar(255, 255, 255));
+	cv::Mat rectFrame = cv::Mat::zeros(input.size(), input.type());
+	cv::Mat polyFrame = cv::Mat::zeros(input.size(), input.type());
+	for (auto contour : contours)
+	{
+		vector<cv::Point> polygon;
+		cv::approxPolyDP(contour, polygon, 0.05 * cv::arcLength(cv::Mat(contour), true), true);
+		double maxCos = 0.0;
+		for (int i = 0; i < polygon.size(); i++)
+		{
+			int size = polygon.size();
+			maxCos = std::max(maxCos, abs(cosAngle(polygon[i], polygon[(i+2) % size], polygon[(i+1) % size])));
+		}
+		int npt[] = {polygon.size()}; //Because fillPoly assumes an array polygons...
+		const cv::Point* ppt[1] = {&polygon[0]};
+		cv::fillPoly(polyFrame, ppt, npt, 1, cv::Scalar(255, 255, 255));
+
+		cv::RotatedRect rect;
+		rect = cv::minAreaRect(polygon);
+
+		if (rect.size.height > 100  && rect.size.height < 400 && rect.size.width > 100 && rect.size.width < 400)
+		{
+			//Consider using average cosAngles
+			if (polygon.size() >= 4 && polygon.size() <= 6)
+			{
+				//if (cv::contourArea(polygon) / rect.size.area() > 0.9)
+				if (cv::pointPolygonTest(getROIPts2f(), rect.center, false) > 0)
+				{
+					ColorRect color_rect;
+					color_rect.rect = rect;
+					color_rect.color = rect_color;
+					color_rects.push_back(color_rect);
+					cv::Point2f pts2f[4];
+					rect.points(pts2f);
+					cv::Point pts[4];
+					for (int i = 0; i < 4; i++) pts[i] = pts2f[i];
+					cv::fillConvexPoly(rectFrame, &pts[0], 4, cv::Scalar(255, 255, 255));
+
+				}
+			}
+		}
+	}
+	if (debug) show("polygon", polyFrame);
+	if (debug) show("rect", rectFrame);
+	return color_rects;
+}
+
+cv::Mat drawColorRects(vector<ColorRect> color_rects, cv::Size size)
+{
+	cv::Mat rectFrame = cv::Mat(size, CV_8UC3);
+	for (auto color_rect : color_rects)
+	{
+		cv::Point2f pts2f[4];
+		color_rect.rect.points(pts2f);
+		cv::Point pts[4];
+		for (int i = 0; i < 4; i++) pts[i] = pts2f[i];
+		cv::fillConvexPoly(rectFrame, &pts[0], 4, color_rect.color);
+	}
 	return rectFrame;
 }
 
 vector<cv::Mat> generateTemplates(cv::Mat input)
 {
 	float PAD_SCALE = 1.5;
-	//Consider coloring rectcosAngles to prevent matching whitespace
 	vector<cv::Mat> pyramid;
 	cv::Mat cropped;
 	cv::Point2f centroid;
@@ -351,7 +420,7 @@ bool getAudio(IAudioEndpointVolume* &endpointVolume)
 	return true;
 }
 
-void setSound(IAudioEndpointVolume *audio, string type)
+void setSound(IAudioEndpointVolume *audio, Room room)
 {
 	for (int i = 100; i >= 0; i--)
 	{
@@ -359,14 +428,21 @@ void setSound(IAudioEndpointVolume *audio, string type)
 		Sleep(50);
 	}
 	
-	if (type == "living")
-		PlaySound(L"D:/Sound/canon_in_d.wav", NULL, SND_LOOP | SND_ASYNC);
-	else if (type == "dining")
-		PlaySound(L"D:/Sound/one_summers_day.wav", NULL, SND_LOOP | SND_ASYNC);
-	else if (type == "study")
-		PlaySound(L"D:/Sound/ocean.wav", NULL, SND_LOOP | SND_ASYNC);
-	
-	//PlaySound(NULL, NULL, SND_LOOP | SND_ASYNC); // to stop music
+	switch (room)
+	{
+		case LIVING:
+			PlaySound(L"D:/sound/canon_in_d.wav", NULL, SND_LOOP | SND_ASYNC);
+			break;
+		case DINING:
+			PlaySound(L"D:/sound/one_summers_day.wav", NULL, SND_LOOP | SND_ASYNC);
+			break;
+		case STUDY:
+			PlaySound(L"D:/sound/ocean.wav", NULL, SND_LOOP | SND_ASYNC);
+			break;
+		default:
+			PlaySound(NULL, NULL, SND_LOOP | SND_ASYNC); // to stop music
+			break;
+	}
 
 	for (int i = 0; i <= 100; i++)
 	{
@@ -381,7 +457,7 @@ bool initCurl(CURL* &curl)
 	CURLcode curl_res;
 	curl_global_init(CURL_GLOBAL_DEFAULT);
 	curl = curl_easy_init();
-	int CLUSTER_IDX = 3;
+	int CLUSTER_IDX = 3; //only 1 - 4
 	unsigned char INITIAL_COLOR[3] = {255, 255, 255}; 
 	if (!curl)
 	{
@@ -402,42 +478,39 @@ bool initCurl(CURL* &curl)
 	return true;
 }
 
-void setLight(CURL* curl, string style)
+void setLight(CURL* curl, Room room)
 {
 	int CLUSTER_IDX = 3;
 	unsigned char light_color[3] = {0, 0, 0};
-	if (style == "off")
+	switch (room)
 	{
-		cout << "Switching off..." << endl;
-		light_color[0] = 0;
-		light_color[1] = 0;
-		light_color[2] = 0;
-	}
-	else if (style == "dining")
-	{
-		cout << "Changing to dining lights..." << endl;
-		light_color[0] = 255;
-		light_color[1] = 0;
-		light_color[2] = 0;
-	}
-	else if (style == "living")
-	{
-		cout << "Changing to living lights..." << endl;
-		light_color[0] = 0;
-		light_color[1] = 255;
-		light_color[2] = 0;
-	}
-	else if (style == "study")
-	{
-		cout << "Changing to study lights..." << endl;
-		light_color[0] = 0;
-		light_color[1] = 0;
-		light_color[2] = 255;
-	}
-	else
-	{
-		cout << "Unknown style" << endl;
-		return;
+		case UNDEFINED:
+			cout << "Switching off..." << endl;
+			light_color[0] = 0;
+			light_color[1] = 0;
+			light_color[2] = 0;
+			break;
+		case DINING:
+			cout << "Changing to dining lights..." << endl;
+			light_color[0] = 255;
+			light_color[1] = 128;
+			light_color[2] = 128;
+			break;
+		case LIVING:
+			cout << "Changing to living lights..." << endl;
+			light_color[0] = 128;
+			light_color[1] = 255;
+			light_color[2] = 128;
+			break;
+		case STUDY:
+			cout << "Changing to study lights..." << endl;
+			light_color[0] = 128;
+			light_color[1] = 128;
+			light_color[2] = 255;
+			break;
+		default:
+			cout << "Unknown style" << endl;
+			return;
 	}
 
 	curl_easy_setopt(curl, CURLOPT_URL, "http://192.168.0.211/led_control.php?name=GP" + to_string(CLUSTER_IDX) + 
@@ -452,22 +525,13 @@ void setLight(CURL* curl, string style)
 		Sleep(5000);
 }
 
-string generateRecordName()
-{
-	time_t curr_time = time(NULL);
-	char time_char[128];
-	strftime(time_char, 128, "%Y-%m-%d-%H%M%S", localtime(&curr_time));
-	string time_str(time_char);
-	string filename = "record_" + time_str + ".avi";
-	return filename;
-}
-
 vector<RoomPhotos> prepareData(cv::Size &imgsize);
-string outputInfo(cv::Mat &img, vector<RoomPhotos> &vecRP);
+Room getSimilarRoom(cv::Mat &img, vector<RoomPhotos> &vecRP);
 double calculateDifference(cv::Mat &img1, cv::Mat &img2);
 
 int _tmain(int argc, _TCHAR* argv[])
 {
+	/*
 	const int CHAIR = 0;
 	const int TABLE = 1;
 	vector<Texture> textures(2);
@@ -484,20 +548,46 @@ int _tmain(int argc, _TCHAR* argv[])
 
 		cv::Mat keypointFrame;
 		cv::drawKeypoints(textures[type].image, textures[type].keypoints, keypointFrame);
-		show("keypoints - " + to_string(type), keypointFrame);
-		textures[type].max_instances = 2;
+		//show("keypoints - " + to_string(type), keypointFrame);
+		textures[type].max_instances = 4;
 		textures[type].color = cv::Scalar(255, 0, 0);
 		textures[type].type = type;
 	}
+	*/
 
+	/********** Test code **********/
+	/*
+	SoundController sc;
+	//sc.setRoom(STUDY);
+	//Sleep(10000);
+	//sc.setRoom(DINING);
+	cv::Mat in;
+	in = cv::imread("D:/tex_test.png", CV_LOAD_IMAGE_COLOR);
+	cv::putText(in, getCurrentTime(), cv::Point(0, in.rows), CV_FONT_HERSHEY_PLAIN, 10, cv::Scalar(255, 255, 255), 10);
+	show("text", in);
+	//findColor(in);
+	cv::waitKey();
+	sc.setRoom(DINING);
+
+	in = cv::imread("D:/shadow_test.jpg");
+	show("original", in);
+	cv::Mat mask = cv::imread("D:/mask.png", CV_LOAD_IMAGE_GRAYSCALE);
+	int DILATE_SIZE = 3;
+	cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(DILATE_SIZE, DILATE_SIZE), cv::Point(DILATE_SIZE / 2, DILATE_SIZE / 2));
+	cv::dilate(mask, mask, element);
+	cv::inpaint(in, mask, in, 3, cv::INPAINT_TELEA);
+	show("inpaint", in);
+	cv::waitKey();
+	  */
+	/*
 	cv::Mat tex_test = cv::imread("D:/tex_test.png");
 	findTexture(tex_test, textures);
 	cv::waitKey();
-
+	*/
 	/*
 	vector<RoomPhotos> testData = prepareData(cv::Size(640, 480));
-	cv::Mat test = cv::imread("D:/failed1.jpg", 0);
-	outputInfo(test, testData);
+	cv::Mat test = cv::imread("D:/failed1.jpg", CV_LOAD_IMAGE_COLOR);
+	cout << getString(getSimilarRoom(test, testData)) << endl;
 	cv::waitKey();
 	*/
 
@@ -532,7 +622,7 @@ int _tmain(int argc, _TCHAR* argv[])
     PGRGuid guid;
     CheckError(busMgr.GetCameraFromIndex(0, &guid));
 
-	Camera cam;
+	GigECamera cam;
     // Connect to a camera
 	CheckError(cam.Connect(&guid));
 
@@ -541,82 +631,131 @@ int _tmain(int argc, _TCHAR* argv[])
 	CheckError(cam.GetCameraInfo(&camInfo));
 
     PrintCameraInfo(&camInfo);   
+ 
+	GigEImageSettingsInfo imageInfo;
+	CheckError(cam.GetGigEImageSettingsInfo(&imageInfo));
+	if ((PIXEL_FORMAT_BGR & imageInfo.pixelFormatBitField) == 0)
+	{
+		cout << "Pixel format is not supported" << endl;
+		return -1;
+	}
+	
+	Mode mode = MODE_0;
+	CheckError(cam.SetGigEImagingMode(mode));
+	  
+	unsigned int maxPacketSize;
+	CheckError(cam.DiscoverGigEPacketSize(&maxPacketSize));
+	cout << "Max packet size = " << maxPacketSize << endl;
 
-	const Mode k_fmt7Mode = MODE_2;
-	const PixelFormat k_fmt7PixFmt = PIXEL_FORMAT_BGR;
+	GigEProperty packetSizeProp;
+	packetSizeProp.propType = PACKET_SIZE;
+	packetSizeProp.isReadable = true;
+	packetSizeProp.value = maxPacketSize;
+	CheckError(cam.SetGigEProperty(&packetSizeProp));
+	cout << "Packet size = " << maxPacketSize << endl;
+	int PACKET_DELAY_VAL = 0;
+	GigEProperty packetDelayProp;
+	packetDelayProp.propType = PACKET_DELAY;
+	packetDelayProp.isReadable = true;
+	packetDelayProp.value = PACKET_DELAY_VAL;
+	CheckError(cam.SetGigEProperty(&packetDelayProp));
+	cout << "Packet delay = " << PACKET_DELAY_VAL << endl;
 
-	 // Query for available Format 7 modes
-    Format7Info fmt7Info;
-    bool supported;
-    fmt7Info.mode = k_fmt7Mode;
-	CheckError(cam.GetFormat7Info( &fmt7Info, &supported ));
+	Property brightnessProp;
+	brightnessProp.type = BRIGHTNESS;
+	brightnessProp.absValue = 25; //% (0-25)
+	brightnessProp.autoManualMode = false;
+	brightnessProp.onOff = true;
+	brightnessProp.absControl = true;
+	CheckError(cam.SetProperty(&brightnessProp));
+	CheckError(cam.GetProperty(&brightnessProp));
+	cout << "Brightness = " << brightnessProp.absValue << endl;
+	Property exposureProp;
+	exposureProp.type = AUTO_EXPOSURE;
+#ifdef COLOR
+	exposureProp.absValue = 1.25;
+#else
+	exposureProp.absValue = 2.00; //EV (-7.5 - 2.5)
+#endif
+	exposureProp.autoManualMode = false;
+	exposureProp.onOff = true;
+	exposureProp.absControl = true;
+	CheckError(cam.SetProperty(&exposureProp));
+	CheckError(cam.GetProperty(&exposureProp));
+	cout << "Exposure = " << exposureProp.absValue << endl;
+	Property sharpnessProp;
+	sharpnessProp.type = SHARPNESS;
+	sharpnessProp.valueA = 1048; //abs (0 - 4095)
+	sharpnessProp.autoManualMode = false;
+	sharpnessProp.onOff = true;
+	sharpnessProp.absControl = false; //absControl not supported
+	CheckError(cam.SetProperty(&sharpnessProp));
+	CheckError(cam.GetProperty(&sharpnessProp));
+	cout << "Sharpness = " << sharpnessProp.valueA << endl;
+	Property gammaProp;
+	gammaProp.type = GAMMA;
+#ifdef COLOR
+	gammaProp.absValue = 0.5;
+#else
+	gammaProp.absValue = 0.5; //(0.5 - 4.0)
+#endif
+	gammaProp.autoManualMode = false;
+	gammaProp.onOff = true;
+	gammaProp.absControl = true;
+	CheckError(cam.SetProperty(&gammaProp));
+	CheckError(cam.GetProperty(&gammaProp));
+	cout << "gamma = " << gammaProp.absValue << endl;
 
-    PrintFormat7Capabilities( fmt7Info );
-    if ( (k_fmt7PixFmt & fmt7Info.pixelFormatBitField) == 0 )
-    {
-        // Pixel format not supported!
-		cout << "Pixel format is not supported" << endl; 
-        return -1;
-    }
-    
-    Format7ImageSettings fmt7ImageSettings;
-    fmt7ImageSettings.mode = k_fmt7Mode;
-    fmt7ImageSettings.offsetX = 0;
-    fmt7ImageSettings.offsetY = 0;
-    fmt7ImageSettings.width = fmt7Info.maxWidth;
-    fmt7ImageSettings.height = fmt7Info.maxHeight;
-    fmt7ImageSettings.pixelFormat = k_fmt7PixFmt;
-
-    bool valid;
-    Format7PacketInfo fmt7PacketInfo;
-
-    // Validate the settings to make sure that they are valid
-	CheckError(cam.ValidateFormat7Settings(
-        &fmt7ImageSettings,
-        &valid,
-        &fmt7PacketInfo )
-		);
-
-    if ( !valid )
-    {
-        // Settings are not valid
-		cout << "Format7 settings are not valid" << endl; 
-        return -1;
-    }
-
+	const int WIDTH = min(floor(sqrt(maxPacketSize * 1000)), (double)min(imageInfo.maxWidth, imageInfo.maxHeight));
+	const int HEIGHT = WIDTH;
+	GigEImageSettings imageSettings;
+	imageSettings.width = (WIDTH/4) * 4;  //Must be of intervals of 4
+	imageSettings.height = (HEIGHT/2) * 2; //Must be of intervals of 2
+	imageSettings.offsetX = ((imageInfo.maxWidth - WIDTH) / 2) / 4 * 4; //Must be of intervals of 4
+	imageSettings.offsetY = ((imageInfo.maxHeight - HEIGHT) / 2) / 2 * 2; //Must be of intervals of 2
+#ifdef COLOR
+	imageSettings.pixelFormat = PIXEL_FORMAT_RGB8;
+#else
+	imageSettings.pixelFormat = PIXEL_FORMAT_MONO8;
+#endif
     // Set the settings to the camera
-	CheckError( cam.SetFormat7Configuration(
-        &fmt7ImageSettings,
-        fmt7PacketInfo.recommendedBytesPerPacket )
-		);
-
+	CheckError(cam.SetGigEImageSettings(&imageSettings));
+	CheckError(cam.GetGigEImageSettings(&imageSettings));
+	cv::Size imgSize(imageSettings.width, imageSettings.height);
+	cout << "Image size = " << imgSize << endl; 	 
+	cout << "Image X-offset = " << imageSettings.offsetX << ", Y-offset = " << imageSettings.offsetY << endl;
+	cout << "Pixel format = " << imageSettings.pixelFormat << endl;
+	
 	// Start capturing images
     CheckError(cam.StartCapture());
-
     // Retrieve frame rate property
-    Property frmRate;
-    frmRate.type = FRAME_RATE;
-    CheckError(cam.GetProperty( &frmRate ));
-    cout << "Frame rate is " << fixed << setprecision(2) << frmRate.absValue << " fps" << endl; 
+    Property frameProp;
+    frameProp.type = FRAME_RATE;
+    CheckError(cam.GetProperty( &frameProp ));
+    cout << "Frame rate is " << fixed << setprecision(2) << frameProp.absValue << " fps" << endl; 
 
+	
 	Image rawImage;  
 	cv::Mat lastFrame, lastStableFrame;
 	bool isProcessed = false;
 	int numUnchanged = 0;
 
-	string lastLighting = "";
+	Room lastLighting = UNDEFINED;
 
-	cv::Size imgSize( fmt7Info.maxWidth / 3, fmt7Info.maxHeight / 3 );
-	vector<RoomPhotos> vecRP = prepareData(imgSize);
+	vector<RoomPhotos> vecRP = prepareData();
 
 #ifdef SAVE
+	deque<string> records;
+	const cv::Size SAVE_FRAME_SIZE = cv::Size(480, 680);
 	cv::VideoWriter outputVideo;
 	int num_frames = 0;
 	int MAX_FRAMES = 24 * 60; // 1 min record
 	int CODEC = cv::VideoWriter::fourcc('F', 'M', 'P', '4');
 	time_t curr_time = time(NULL);
 	time_t prev_time = curr_time;
-	outputVideo.open(generateRecordName(), CODEC, 24, imgSize, false);
+	string record = generateRecordName();
+	outputVideo.open(record, CODEC, 24, SAVE_FRAME_SIZE, true);
+	records.push_back(record);
 	if (!outputVideo.isOpened())
 	{
 		cout << "Could not open record for writing... exiting" << endl;
@@ -634,40 +773,159 @@ int _tmain(int argc, _TCHAR* argv[])
 	PixelFormat pixFormat;
 	unsigned int rows, cols, stride;
 	rawImage.GetDimensions( &rows, &cols, &stride, &pixFormat );
+	cout << "Pixel format = " << pixFormat << endl;
+#ifdef COLOR
+	NowFrame = cv::Mat(rows, cols, CV_8UC3, rawImage.GetData()).clone();
+	cv::cvtColor(NowFrame, NowFrame, CV_RGB2BGR);
+#else
 	NowFrame = cv::Mat(rows, cols, CV_8UC1, rawImage.GetData()).clone();
+#endif
 
 	// If background image exists and less than 1 hour old, use it
 	struct stat st;
 	if (stat("background.jpg", &st) == 0 && time(NULL) - st.st_mtime < 12*60*60)
 	{
-		background = cv::imread("background.jpg", 0);
+		cout << "Using old background" << endl;
+		background = cv::imread("background.jpg", CV_LOAD_IMAGE_GRAYSCALE);
 	}
 	else
 	{
+		cout << "Capturing new background" << endl;
 		background = NowFrame.clone();
 		cv::imwrite("background.jpg", background);
 	}
+	cv::resize(background, background, NowFrame.size());
+	
+	cv::Mat bg_mask;
+	cv::Ptr<cv::BackgroundSubtractor> p_mog2 = cv::createBackgroundSubtractorMOG2();	
 
-	const int MIN_UNCHANGED = 24;
+	const int MIN_UNCHANGED = 3 * frameProp.absValue;
+	const float DIFF_THRESH = 3.0;
 	vector<cv::Mat> stableFrames(MIN_UNCHANGED);
+	cv::Mat prev_rect_mask;
+	cv::Mat prevFrame;
+	vector<ColorRect> prev_rects;
+
+	//TODO: Set this parameter
+	const float MAX_MOVE = 10;
+	vector<cv::Point2f> ROI_PTS2f = getROIPts2f();
+
+	cv::Scalar CHAIR_COLOR1(0, 15, 0);
+	cv::Scalar CHAIR_COLOR2(40, 90, 75);
+	cv::Scalar TABLE_COLOR1(0, 0, 0);
+	cv::Scalar TABLE_COLOR2(50, 20, 30);
+	cv::Scalar TABLE_COLOR3(120, 15, 50);
+	cv::Scalar TABLE_COLOR4(130, 45, 90);
+	vector<tuple<cv::Scalar, cv::Scalar>> CHAIR_COLORS;
+	CHAIR_COLORS.push_back(tuple<cv::Scalar, cv::Scalar>(CHAIR_COLOR1, CHAIR_COLOR2));
+	vector<tuple<cv::Scalar, cv::Scalar>> TABLE_COLORS;
+	TABLE_COLORS.push_back(tuple<cv::Scalar, cv::Scalar>(TABLE_COLOR1, TABLE_COLOR2));
+	TABLE_COLORS.push_back(tuple<cv::Scalar, cv::Scalar>(TABLE_COLOR3, TABLE_COLOR4));
+/*
+	while(true)
+	{
+		CheckError(cam.RetrieveBuffer(&rawImage));
+		cv::Mat f = cv::Mat(rows, cols, CV_8UC3, rawImage.GetData());
+		cv::cvtColor(f, f, CV_RGB2BGR);
+		cv::Mat rectFrame = drawColorRects(findColor(f, TABLE_COLOR1, TABLE_COLOR2), f.size());
+		show("rects", rectFrame);
+		cv::waitKey(500);
+	}
+*/
+
 	while (true)
     {
 	 	CheckError(cam.RetrieveBuffer( &rawImage ));
-		NowFrame = cv::Mat(rows, cols, CV_8UC1, rawImage.GetData()).clone(); //Prevent NowFrame from changing unexpectedly
-		cv::Mat rectFrame = findRect(NowFrame, background);
-		cv::resize(rectFrame, rectFrame, imgSize);
+#ifdef COLOR
+		NowFrame = cv::Mat(rows, cols, CV_8UC3, rawImage.GetData()).clone();
+		cv::cvtColor(NowFrame, NowFrame, CV_RGB2BGR);
+#else
+		NowFrame = cv::Mat(rows, cols, CV_8UC1, rawImage.GetData()).clone();
+#endif
 
-		if (cv::countNonZero(rectFrame) > 0) //Prevent phash division by zero error
+		cv::Mat roiFrame = NowFrame.clone();
+		
+		p_mog2->apply(NowFrame, bg_mask);
+		//show("bg_mask", bg_mask);
+	
+		//TODO: Get background under different illumination
+/*
+		if (!prev_rect_mask.empty() && !prevFrame.empty())
+		{
+			int DILATE_SIZE = 3;
+			cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(DILATE_SIZE, DILATE_SIZE), cv::Point(DILATE_SIZE / 2, DILATE_SIZE / 2));
+			cv::dilate(prev_rect_mask, prev_rect_mask, element);
+			//cout << "prev size = " << prevFrame.size() << ", prev_mask size = " << prev_rect_mask.size() << ", bg size = " << background.size() << endl;
+			cv::inpaint(prevFrame, prev_rect_mask, background, 3, cv::INPAINT_TELEA);
+		}
+*/
+		vector<ColorRect> chair_rects = findColor(NowFrame, CHAIR_COLOR1, CHAIR_COLOR2, cv::Scalar(0, 0, 255));// = findTexture(NowFrame, textures); 
+		vector<ColorRect> table_rects = findColor(NowFrame, TABLE_COLOR1, TABLE_COLOR2, cv::Scalar(255, 0, 0));// = findRect(NowFrame, background);
+		//cout << chair_rects.size() << endl;
+		cv::Mat chairFrame = drawColorRects(chair_rects, NowFrame.size());
+		show("chair", chairFrame);
+		cv::Mat tableFrame = drawColorRects(table_rects, NowFrame.size());
+		show("table", tableFrame);
+		vector<ColorRect> now_rects = chair_rects;
+		now_rects.insert(now_rects.end(), table_rects.begin(), table_rects.end());
+
+		vector<ColorRect> true_rects;
+		if (now_rects.size() < prev_rects.size())
+		{
+			for (auto prev_rect = prev_rects.begin(); prev_rect != prev_rects.end(); prev_rect++)
+			{
+				bool foundMatch = false;
+				//TODO: Use min_element instead
+				for (auto now_rect = now_rects.begin(); now_rect != now_rects.end(); now_rect++)
+				{
+					if (cv::norm(prev_rect->rect.center - now_rect->rect.center) < MAX_MOVE)
+					{
+						foundMatch = true;
+						if (cv::pointPolygonTest(ROI_PTS2f, now_rect->rect.center, true) > 0)
+						{	
+							true_rects.push_back(*now_rect);
+							//now_rect = now_rects.erase(now_rect); //Remove rect from future matching and correct now_rect iterator
+						}
+						break;
+					}
+				}
+				if (!foundMatch)
+				{
+					true_rects.push_back(*prev_rect);
+				}
+			}
+		}
+		else
+		{
+			true_rects = now_rects;
+		}
+		prev_rects = true_rects;
+
+		cv::Mat combinedFrame = drawColorRects(true_rects, NowFrame.size());
+		//cv::circle(combinedFrame, cv::Point(ROI_PTS2f[0]), 10, cv::Scalar(255, 255, 255), 10);
+		vector<cv::Point> ROI_PTS;
+		for (auto roi_pts2f : ROI_PTS2f)
+			ROI_PTS.push_back(cv::Point(roi_pts2f));
+		//cv::fillConvexPoly(combinedFrame, ROI_PTS, cv::Scalar(255, 255, 255));
+		show("combined", combinedFrame);
+		//imwrite("example.jpg", combinedFrame);
+		//cv::waitKey();
+
+		cv::Mat grayFrame;
+		cv::cvtColor(combinedFrame, grayFrame, CV_BGR2GRAY);
+		if (cv::countNonZero(grayFrame) > 0)
 		{
 			if (!lastFrame.empty())
 			{	
-				double diff = calculateDifference(rectFrame, lastFrame);
+				double diff = calculateDifference(combinedFrame, lastFrame);
 				cout << diff << endl;
-				if(diff < 0.5){
+				if(diff < DIFF_THRESH)
+				{
+					stableFrames[numUnchanged % MIN_UNCHANGED] = combinedFrame;
 					numUnchanged++;
-					stableFrames[numUnchanged % MIN_UNCHANGED] = rectFrame;
-				}else{
-					stableFrames.clear();
+				}
+				else
+				{
 					numUnchanged = 0;
 					isProcessed = false;
 					cout << "Change detected: " << diff << endl;
@@ -677,7 +935,7 @@ int _tmain(int argc, _TCHAR* argv[])
 			// needProcess
 			if (numUnchanged >= MIN_UNCHANGED && isProcessed == false)
 			{
-				cv::Mat averageFrame = cv::Mat::zeros(rectFrame.size(), CV_8UC1);
+				cv::Mat averageFrame = cv::Mat::zeros(combinedFrame.size(), combinedFrame.type());
 				for (auto frame : stableFrames)
 				{
 					averageFrame += frame / stableFrames.size();
@@ -686,12 +944,12 @@ int _tmain(int argc, _TCHAR* argv[])
 				if (!lastStableFrame.empty())
 				{
 					double diff = calculateDifference(lastStableFrame,averageFrame);
-					if ( diff > 0.5)
+					if ( diff > DIFF_THRESH / 2)
 					{
-						string nowLighting = outputInfo(averageFrame, vecRP);
+						Room nowLighting = getSimilarRoom(averageFrame, vecRP);
 						if (lastLighting != nowLighting)
 						{
-							cout<<nowLighting<<endl;
+							cout<< getString(nowLighting) <<endl;
 							lastLighting = nowLighting;
 							setSound(audio, nowLighting);
 #ifdef CURL
@@ -708,32 +966,43 @@ int _tmain(int argc, _TCHAR* argv[])
 				else
 				{
 					lastStableFrame = averageFrame.clone();
-					string nowLighting = outputInfo(averageFrame, vecRP);
+					Room nowLighting = getSimilarRoom(averageFrame, vecRP);
 					lastLighting = nowLighting;
-					cout<<nowLighting<<endl;
+					cout<< getString(nowLighting) <<endl;
 					setSound(audio, nowLighting);
-#ifdef CURL
+	#ifdef CURL
 					setLight(curl, nowLighting);
-#endif
+	#endif
 					isProcessed = true;
 				}	
 			}
 		}
 
-		lastFrame = rectFrame.clone();
+		lastFrame = combinedFrame.clone();
+		cv::cvtColor(lastFrame.clone(), prev_rect_mask, CV_BGR2GRAY, 1);
+ 		prevFrame = NowFrame.clone();
+
 
 #ifdef SAVE
 		curr_time = time(NULL);
 		if (curr_time - prev_time >= 1)
 		{
 			cv::Mat saveFrame;
-			cv::resize(NowFrame, saveFrame, imgSize);
+			cv::resize(NowFrame, saveFrame, SAVE_FRAME_SIZE);
+			cv::putText(saveFrame, getCurrentTime(), cv::Point(0, saveFrame.rows), CV_FONT_HERSHEY_PLAIN, 10, cv::Scalar(255, 255, 255), 10);
 			outputVideo.write(saveFrame);
 			prev_time = curr_time;
 			num_frames++;
 			if (num_frames > MAX_FRAMES)
 			{
-				outputVideo.open(generateRecordName(), CODEC, 24, imgSize, false);
+				string record = generateRecordName();
+				outputVideo.open(record, CODEC, 24, SAVE_FRAME_SIZE, false);
+				records.push_back(record);
+				if (records.size() > 10)
+				{
+					remove(records[0].c_str());
+					records.pop_front();
+				}
 				num_frames = 0;
 			}
 		}
@@ -754,100 +1023,49 @@ int _tmain(int argc, _TCHAR* argv[])
 }
 
 
-vector<RoomPhotos> prepareData(cv::Size &imgsize){
+vector<RoomPhotos> prepareData(){
 	//Use full resolution for rectcosAngle extraction, resize results
 	vector<RoomPhotos> vecRP;
 	vecRP.reserve(100);
+	cv::Size TRAIN_IMAGE_SIZE(640, 480);
 
 	string wkdir = "D:/TrainData/";
-	string imgNameW1 = wkdir + "dining/*.jpg";
-	string imgNameW2 = wkdir + "living/*.jpg";
-	string imgNameW3 = wkdir + "study/*.jpg";
 	string background = wkdir + "background.jpg";
-	cv::Mat bg_gray = cv::imread(background, 0);
-	vecS namesNE;
-	int imgNum;
-	struct stat st;
+	cv::Mat bg_gray = cv::imread(background, CV_LOAD_IMAGE_GRAYSCALE);
 
-	//TODO: Create array of type strings to iterate over
-	// dining
-	imgNum = CmFile::GetNamesNE(imgNameW1, namesNE);
-	for (int i = 0; i < imgNum; i++)
+	for (int k = 0; k < 3; k++)
 	{
-		RoomPhotos temp;
-		cv::Mat train;
-		if (stat((wkdir + "dining/filtered/" + namesNE[i] + "_filtered.jpg").c_str(), &st) == 0)
+		vecS namesNE;
+		string imgName = wkdir + getString(static_cast<Room>(k)) + "/*.png";
+		int imgNum = CmFile::GetNamesNE(imgName, namesNE);
+		for (int i = 0; i < imgNum; i++)
 		{
-			train = cv::imread(wkdir + "dining/filtered/" + namesNE[i] + "_filtered.jpg", 0); 
-			cv::resize(train, train,imgsize);
+			RoomPhotos temp;
+			cv::Mat train;
+			struct stat st;
+
+			if (stat((wkdir + getString(static_cast<Room>(k)) + "/" + namesNE[i] + ".png").c_str(), &st) == 0)
+			{
+				train = cv::imread(wkdir + getString(static_cast<Room>(k)) + "/" + namesNE[i] + ".png", CV_LOAD_IMAGE_COLOR); 
+				cv::resize(train, train, TRAIN_IMAGE_SIZE);
+			}
+			else
+			{
+				cout << "Missing training data" << endl;
+				/*
+				cv::Mat gray = cv::imread(wkdir + getString(static_cast<Room>(k)) + "/" + namesNE[i] + ".jpg", CV_LOAD_IMAGE_GRAYSCALE);
+				train = drawColorRects(findRect(gray, bg_gray), gray.size());
+				//cv::resize(train, train,imgsize);
+				cv::cvtColor(train, train, CV_GRAY2BGR);
+				cv::imwrite(wkdir + getString(static_cast<Room>(k)) + "/filtered/" + namesNE[i] + "_filtered.jpg", train);
+				*/
+			}
+			temp.img = CImg<uchar>(train);
+			temp.score = 0;
+			temp.room = static_cast<Room>(k);
+			vecRP.push_back(temp);
 		}
-		else
-		{
-			cv::Mat gray = cv::imread(wkdir + "dining/" + namesNE[i] + ".jpg", 0);
-			train = findRect(gray, bg_gray);
-			cv::resize(train, train,imgsize);
-			cv::imwrite(wkdir + "dining/filtered/" + namesNE[i] + "_filtered.jpg", train);
-		}
-		temp.img = CImg<uchar>(train);
-		temp.score = 0;
-		temp.type = "dining";
-		vecRP.push_back(temp);
-		cout << "Added " + namesNE[i] << ":" << imgsize << endl;
 	}
-
-
-	// livin
-	namesNE.clear();
-	imgNum = CmFile::GetNamesNE(imgNameW2, namesNE);
-	for (int i = 0; i < imgNum; i++)
-	{
-		RoomPhotos temp;
-		cv::Mat train;
-		if (stat((wkdir + "living/filtered/" + namesNE[i] + "_filtered.jpg").c_str(), &st) == 0)
-		{
-			train = cv::imread(wkdir + "living/filtered/" + namesNE[i] + "_filtered.jpg", 0); 
-			cv::resize(train, train,imgsize);
-		}
-		else
-		{
-			cv::Mat gray = cv::imread(wkdir + "living/" + namesNE[i] + ".jpg", 0);
-			train = findRect(gray, bg_gray);
-			cv::resize(train, train,imgsize);
-			cv::imwrite(wkdir + "living/filtered/" + namesNE[i] + "_filtered.jpg", train);
-		}
-		temp.img = CImg<uchar>(train);
-		temp.score = 0;
-		temp.type = "living";
-		vecRP.push_back(temp);
-		cout << "Added " + namesNE[i] << ":" << imgsize << endl;
-	}
-
-	// study
-	namesNE.clear();
-	imgNum = CmFile::GetNamesNE(imgNameW3, namesNE);
-	for (int i = 0; i < imgNum; i++)
-	{
-		RoomPhotos temp;
-		cv::Mat train;
-		if (stat((wkdir + "study/filtered/" + namesNE[i] + "_filtered.jpg").c_str(), &st) == 0)
-		{
-			train = cv::imread(wkdir + "study/filtered/" + namesNE[i] + "_filtered.jpg", 0); 
-			cv::resize(train, train,imgsize);
-		}
-		else
-		{
-			cv::Mat gray = cv::imread(wkdir + "study/" + namesNE[i] + ".jpg", 0);
-			train = findRect(gray, bg_gray);
-			cv::resize(train, train,imgsize);
-			cv::imwrite(wkdir + "study/filtered/" + namesNE[i] + "_filtered.jpg", train);
-		}
-		temp.img = CImg<uchar>(train);
-		temp.score = 0;
-		temp.type = "study";
-		vecRP.push_back(temp);
-		cout << "Added " + namesNE[i] << ":" << imgsize << endl;
-	}
-
 	return vecRP;
 }
 
@@ -857,6 +1075,7 @@ double calcScore(cv::Mat img, cv::Mat train)
 	// b) encode rectcosAngle positions and orientations and compare
 	// c) template matching with multiscale multiorientation training data
 
+	cv::resize(img, img, train.size());
 	cv::Mat result;
 	double min = 1e5;
 	double max = 0.0;
@@ -867,23 +1086,19 @@ double calcScore(cv::Mat img, cv::Mat train)
 		cv::matchTemplate(img, tmpl, result, CV_TM_CCOEFF_NORMED);
 		cv::Point max_pos;
 		cv::Point min_pos;
-		cv::threshold(result, result, 0, 255, cv::THRESH_TOZERO);
 		cv::minMaxLoc(result, &this_min, &this_max, &min_pos, &max_pos);
-		//imshow("tmpl", tmpl);
-		//imshow("tm", result);
-		//cv::waitKey();
+
 		if (this_max > max)
 		{
 			max = this_max;
 		}
 	}
-	//cv::waitKey();
 	return max;
 }
 
 
 //Use normalized distance and normalized orientation to compare
-string outputInfo(cv::Mat &img, vector<RoomPhotos> &vecRP){
+Room getSimilarRoom(cv::Mat &img, vector<RoomPhotos> &vecRP){
 	
 	CImg<uchar> img1 = CImg<uchar>(img);
 
@@ -904,14 +1119,14 @@ string outputInfo(cv::Mat &img, vector<RoomPhotos> &vecRP){
 		}
 	}
 
-	show("most_similar", cv::Mat(maxRP.img.get_MAT()));
 	cout << "Score: " << maxRP.score << endl;
 	if (maxRP.score < 0.6)
 	{
-		return(string("undefine type"));
+		return Room::UNDEFINED;
 	}else
 	{
-		return maxRP.type;
+		show("most_similar", cv::Mat(maxRP.img.get_MAT()));
+		return maxRP.room;
 	}
 
 }
