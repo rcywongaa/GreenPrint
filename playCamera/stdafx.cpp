@@ -25,10 +25,10 @@ string getString(Room room)
 vector<cv::Point2f> getROIPts2f()
 {
 	vector<cv::Point2f> ROI_PTS2f;
-	ROI_PTS2f.push_back(cv::Point2f(400, 335));
-	ROI_PTS2f.push_back(cv::Point2f(1470, 665));
-	ROI_PTS2f.push_back(cv::Point2f(1370, 1450));
-	ROI_PTS2f.push_back(cv::Point2f(140, 1285));
+	ROI_PTS2f.push_back(cv::Point2f(425, 490));
+	ROI_PTS2f.push_back(cv::Point2f(1515, 530));
+	ROI_PTS2f.push_back(cv::Point2f(1540, 1360));
+	ROI_PTS2f.push_back(cv::Point2f(360, 1345));
 	//ROI_PTS2f.push_back(ROI_PTS2f[0]);
 	return ROI_PTS2f;
 }
@@ -47,7 +47,8 @@ void PrintError( Error error )
     error.PrintErrorTrace();
 }
 
-int CheckError( Error error ){
+int CheckError( Error error )
+{
 	if (error != PGRERROR_OK)
     {
 		//Ignore image consistency error for now...
@@ -57,4 +58,22 @@ int CheckError( Error error ){
 		return -1;
     }
 	return 0;
+}
+
+void show(string window, cv::Mat img)
+{
+	cv::Mat resized;
+	cv::resize(img, resized, cv::Size(320, 240));
+	//cv::resize(img, resized, cv::Size(640, 480));
+	imshow(window, resized);
+}
+
+cv::Mat getROIMask()
+{
+	cv::Mat mask(1944, 1944, CV_8UC1);
+	cv::Point pts[4];
+	for (int i = 0; i < 4; i++) pts[i] = getROIPts2f()[i];
+	cv::fillConvexPoly(mask, &pts[0], 4, cv::Scalar(255));
+	//show("roi mask", mask);
+	return mask;
 }

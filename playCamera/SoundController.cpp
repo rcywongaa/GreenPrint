@@ -74,7 +74,7 @@ void SoundController::setRoom(Room room)
 float SoundController::playSound(Room room)
 {
 	float duration = 0;
-	if (room != UNDEFINED)
+	if (room < UNDEFINED)
 	{
 		SNDFILE* file;
 		SF_INFO info;
@@ -90,7 +90,7 @@ float SoundController::playSound(Room room)
 	else
 	{
 		PlaySound(NULL, NULL, SND_ASYNC); // to stop music
-		cout << "Stop" << endl;
+		//cout << "Stop" << endl;
 	}
 	return duration;
 }
@@ -105,7 +105,7 @@ void SoundController::playSoundCont()
 	fadeIn();
 	while (true)
 	{
-		if (isExiting = true) break;
+		if (isExiting) break;
 		time_t curr_time = time(NULL);
 		//cout << "Playtime = " << curr_time - start_time << endl;
 		if (curr_time - start_time > duration) // duration of soundtrack

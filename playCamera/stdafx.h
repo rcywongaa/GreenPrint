@@ -31,6 +31,7 @@
 #include <iomanip>
 #include <thread>
 #include <mutex>
+#include <atomic>
 #include "FlyCapture2.h"
 
 using namespace std;
@@ -49,7 +50,7 @@ using namespace FlyCapture2;
 #include "pHash.h"
 #pragma comment(lib, "pHash.lib")
 
-enum Room {DINING, LIVING, STUDY, UNDEFINED};
+enum Room {DINING, LIVING, STUDY, UNDEFINED, NUM_ROOMS, ON, OFF};
 
 struct RoomPhotos
 {
@@ -77,3 +78,5 @@ vector<cv::Point2f> getROIPts2f();
 string getCurrentTime();
 int CheckError(Error error);
 void PrintError(Error error);
+cv::Mat getROIMask();
+void show(string window, cv::Mat img);

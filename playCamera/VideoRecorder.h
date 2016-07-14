@@ -1,24 +1,28 @@
 #pragma once
 #include "stdafx.h"
+#include "MultithreadCam.h"
 
 class VideoRecorder
 {
 public:
-	VideoRecorder(GigECamera cam, cv::Size image_size);
+	VideoRecorder(MultithreadCam* cam);
 	~VideoRecorder(void);
 	string generateRecordName();
 	void recordCont();
 private:
 	std::thread m_recordRunner;
+	int FONT_SIZE;
+	int FRAME_RATE;
 	cv::Size SAVE_FRAME_SIZE;
-	int MAX_FRAMES;
+	int DURATION;
+	int MAX_NUM_RECORDS;
 	int CODEC;
-	cv::Size m_image_size;
+	bool ISCOLOR;
 	deque<string> m_records;
 	time_t curr_time;
 	time_t prev_time;
 	int num_frames;
-	GigECamera m_cam;
+	MultithreadCam* m_cam;
 	cv::VideoWriter m_outputVideo;
 	bool isExiting;
 };

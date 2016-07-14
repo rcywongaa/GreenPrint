@@ -16,7 +16,7 @@ class SoundController
 		volatile Room m_room;
 		volatile bool m_isPlaying;
 		std::thread m_playSoundRunner;
-		static const int MAX_VOL = 10; // Between 0 - 100
+		static const int MAX_VOL = 30; // Between 0 - 100
 		static const int NUM_LIVING_SOUNDS = 29;
 		static const int NUM_DINING_SOUNDS = 9;
 		static const int NUM_STUDY_SOUNDS = 21;

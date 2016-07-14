@@ -3,20 +3,20 @@
 
 /*
 TODO:
-Test update background image / Capture backgrounds under different lights
-Test handle occlusion
-Zoom / ROI from camera image
-ROI for tracking
-New training layouts
-Test delete old records
+Distinguish table and chair based on size
+Use adaptiveThreshold
 */
 
 #define COLOR
-//#define SAVE
+#define SAVE
+#define LIGHT
+//#define TIMER
 
 #include "stdafx.h"
 #include "CmFile.h"
 #include "SoundController.h"
+#include "VideoRecorder.h"
+#include "MultithreadCam.h"
 
 void PrintBuildInfo()
 {
@@ -53,14 +53,6 @@ void PrintFormat7Capabilities( Format7Info fmt7Info )
     cout << "Offset Unit size: (" << fmt7Info.offsetHStepSize << ", " << fmt7Info.offsetVStepSize << ")" << endl;
 	cout << "Pixel format bitfield: 0x" << fmt7Info.pixelFormatBitField << endl;
 	
-}
-
-void show(string window, cv::Mat img)
-{
-	cv::Mat resized;
-	cv::resize(img, resized, cv::Size(320, 240));
-	//cv::resize(img, resized, cv::Size(640, 480));
-	imshow(window, resized);
 }
 
 double cosAngle(cv::Point pt1, cv::Point pt2, cv::Point pt0 )
@@ -274,11 +266,14 @@ vector<ColorRect> findRect(cv::Mat input, cv::Mat background)
 
 vector<ColorRect> findColor(cv::Mat input, cv::Scalar color1, cv::Scalar color2, cv::Scalar rect_color)
 {
-	bool debug = false;
+	bool debug = true;
 	vector<ColorRect> color_rects;
 	if (debug) show("input", input);
-	cv::medianBlur(input, input, 15);
+	cv::medianBlur(input, input, 31);
 	if (debug) show("filtered", input);
+	cv::Mat gray;
+	cv::cvtColor(input, gray, CV_BGR2GRAY);
+	show("gray", gray);
 	cv::Mat hsv;
 	cv::Mat hsv_array[3];
 	cv::Mat mask;
@@ -288,10 +283,12 @@ vector<ColorRect> findColor(cv::Mat input, cv::Scalar color1, cv::Scalar color2,
 	if (debug) show("s", hsv_array[1]);
 	if (debug)show("v", hsv_array[2]);
 	cv::inRange(hsv, color1, color2, mask);
+	cv::bitwise_and(mask, getROIMask(), mask);
 	if (debug) show("mask", mask);
-	cv::dilate(mask, mask, cv::Mat(), cv::Point(-1, -1), 5);
-	cv::erode(mask, mask, cv::Mat(), cv::Point(-1, -1), 15);
+	cv::erode(mask, mask, cv::Mat(), cv::Point(-1, -1), 10);
 	cv::dilate(mask, mask, cv::Mat(), cv::Point(-1, -1), 10);
+	//cv::erode(mask, mask, cv::Mat(), cv::Point(-1, -1), 10);
+	//cv::dilate(mask, mask, cv::Mat(), cv::Point(-1, -1), 5);
 	if (debug) show("dilated_mask", mask);
 
 	vector<vector<cv::Point>> contours;
@@ -306,11 +303,17 @@ vector<ColorRect> findColor(cv::Mat input, cv::Scalar color1, cv::Scalar color2,
 		vector<cv::Point> polygon;
 		cv::approxPolyDP(contour, polygon, 0.05 * cv::arcLength(cv::Mat(contour), true), true);
 		double maxCos = 0.0;
+		vector<float> cos;
+		float medianCos = 0.0;
 		for (int i = 0; i < polygon.size(); i++)
 		{
 			int size = polygon.size();
-			maxCos = std::max(maxCos, abs(cosAngle(polygon[i], polygon[(i+2) % size], polygon[(i+1) % size])));
+			cos.push_back(cosAngle(polygon[i], polygon[(i+2) % size], polygon[(i+1) % size]));
+			//maxCos = std::max(maxCos, abs(cosAngle(polygon[i], polygon[(i+2) % size], polygon[(i+1) % size])));
 		}
+		int median_idx = cos.size() / 2;
+		std::nth_element(cos.begin(), cos.begin() + median_idx, cos.end());
+		medianCos = cos[median_idx];
 		int npt[] = {polygon.size()}; //Because fillPoly assumes an array polygons...
 		const cv::Point* ppt[1] = {&polygon[0]};
 		cv::fillPoly(polyFrame, ppt, npt, 1, cv::Scalar(255, 255, 255));
@@ -342,7 +345,13 @@ vector<ColorRect> findColor(cv::Mat input, cv::Scalar color1, cv::Scalar color2,
 	}
 	if (debug) show("polygon", polyFrame);
 	if (debug) show("rect", rectFrame);
+	getROIMask();
 	return color_rects;
+}
+
+vector<ColorRect> findColor(cv::Mat input, tuple<cv::Scalar, cv::Scalar> colors, cv::Scalar rect_color)
+{
+	return findColor(input, get<0>(colors), get<1>(colors), rect_color);
 }
 
 cv::Mat drawColorRects(vector<ColorRect> color_rects, cv::Size size)
@@ -350,11 +359,13 @@ cv::Mat drawColorRects(vector<ColorRect> color_rects, cv::Size size)
 	cv::Mat rectFrame = cv::Mat(size, CV_8UC3);
 	for (auto color_rect : color_rects)
 	{
+		cv::Mat this_rect_frame(size, CV_8UC3);
 		cv::Point2f pts2f[4];
 		color_rect.rect.points(pts2f);
 		cv::Point pts[4];
 		for (int i = 0; i < 4; i++) pts[i] = pts2f[i];
-		cv::fillConvexPoly(rectFrame, &pts[0], 4, color_rect.color);
+		cv::fillConvexPoly(this_rect_frame, &pts[0], 4, color_rect.color);
+		cv::max(this_rect_frame, rectFrame, rectFrame);
 	}
 	return rectFrame;
 }
@@ -377,17 +388,20 @@ vector<cv::Mat> generateTemplates(cv::Mat input)
 	cv::Mat drawFrame = cv::Mat::zeros(input.size(), input.type());
 	cv::drawContours(drawFrame, contours, -1, cv::Scalar(255, 255, 255));
 	cv::circle(drawFrame, centroid, radius, cv::Scalar(255, 0, 0));
+	//show("draw", drawFrame);
+	//show("tmp", input);
+	//cv::waitKey(1);
 	cropped = input(cv::Rect(centroid.x - radius, centroid.y - radius, 2*radius, 2*radius)).clone();
 
-	for (float i = 1; i > 0.201; i -= 0.1)
+	for (float i = 1; i > 0.99; i -= 0.1)
 	{
 		cv::Size size(cropped.size().width * i, cropped.size().height * i); 
 		cv::Mat scaled;
 		cv::resize(cropped, scaled, size);
-		for (double cosAngle = 0; cosAngle < 359.9; cosAngle += 15)
+		for (double angle = 0; angle < 359.9; angle += 90)
 		{
 			cv::Mat scaled_rotated;
-			cv::Mat rot_mat = cv::getRotationMatrix2D(cv::Point2f(scaled.size().width / 2, scaled.size().height / 2), cosAngle, 1);
+			cv::Mat rot_mat = cv::getRotationMatrix2D(cv::Point2f(scaled.size().width / 2, scaled.size().height / 2), angle, 1);
 			cv::warpAffine(scaled, scaled_rotated, rot_mat, scaled.size());
 			cv::Size pad_size;
 			if (scaled_rotated.cols * PAD_SCALE > cropped.cols || scaled_rotated.rows * PAD_SCALE > cropped.rows)
@@ -403,54 +417,6 @@ vector<cv::Mat> generateTemplates(cv::Mat input)
 	return pyramid;
 }
 
-bool getAudio(IAudioEndpointVolume* &endpointVolume)
-{
-	CoInitialize(NULL);
-	IMMDeviceEnumerator *deviceEnumerator = NULL;
-	HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID *)&deviceEnumerator);
-	IMMDevice *defaultDevice = NULL;
-
-	hr = deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
-	deviceEnumerator->Release();
-	deviceEnumerator = NULL;
-
-	hr = defaultDevice->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_INPROC_SERVER, NULL, (LPVOID *)&endpointVolume);
-	defaultDevice->Release();
-	defaultDevice = NULL;
-	return true;
-}
-
-void setSound(IAudioEndpointVolume *audio, Room room)
-{
-	for (int i = 100; i >= 0; i--)
-	{
-		audio->SetMasterVolumeLevelScalar(i/100.0, NULL);
-		Sleep(50);
-	}
-	
-	switch (room)
-	{
-		case LIVING:
-			PlaySound(L"D:/sound/canon_in_d.wav", NULL, SND_LOOP | SND_ASYNC);
-			break;
-		case DINING:
-			PlaySound(L"D:/sound/one_summers_day.wav", NULL, SND_LOOP | SND_ASYNC);
-			break;
-		case STUDY:
-			PlaySound(L"D:/sound/ocean.wav", NULL, SND_LOOP | SND_ASYNC);
-			break;
-		default:
-			PlaySound(NULL, NULL, SND_LOOP | SND_ASYNC); // to stop music
-			break;
-	}
-
-	for (int i = 0; i <= 100; i++)
-	{
-		audio->SetMasterVolumeLevelScalar(i/100.0, NULL);
-		Sleep(50);
-	}
-}
-
 bool initCurl(CURL* &curl)
 {
 	/********** CURL LIGHTING CONTROL SETUP **********/
@@ -464,6 +430,7 @@ bool initCurl(CURL* &curl)
 		cout << "Unable to connect to lighting... exiting" << endl;
 		return false;
 	}	
+	/*
 	curl_easy_setopt(curl, CURLOPT_URL, "http://192.168.0.211/led_control.php?name=GP" + to_string(CLUSTER_IDX) + 
 		"&rgb_value=" + to_string(INITIAL_COLOR[0]) + "," + to_string(INITIAL_COLOR[1]) + "," + to_string(INITIAL_COLOR[2]));
 	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L); // Follow redirection
@@ -475,137 +442,235 @@ bool initCurl(CURL* &curl)
 		curl_easy_cleanup(curl);
 		return false;
 	}
+	*/
 	return true;
 }
 
-void setLight(CURL* curl, Room room)
+void sendUrl(CURL* curl, int gp, int r, int g, int b)
 {
-	int CLUSTER_IDX = 3;
-	unsigned char light_color[3] = {0, 0, 0};
-	switch (room)
-	{
-		case UNDEFINED:
-			cout << "Switching off..." << endl;
-			light_color[0] = 0;
-			light_color[1] = 0;
-			light_color[2] = 0;
-			break;
-		case DINING:
-			cout << "Changing to dining lights..." << endl;
-			light_color[0] = 255;
-			light_color[1] = 128;
-			light_color[2] = 128;
-			break;
-		case LIVING:
-			cout << "Changing to living lights..." << endl;
-			light_color[0] = 128;
-			light_color[1] = 255;
-			light_color[2] = 128;
-			break;
-		case STUDY:
-			cout << "Changing to study lights..." << endl;
-			light_color[0] = 128;
-			light_color[1] = 128;
-			light_color[2] = 255;
-			break;
-		default:
-			cout << "Unknown style" << endl;
-			return;
-	}
-
-	curl_easy_setopt(curl, CURLOPT_URL, "http://192.168.0.211/led_control.php?name=GP" + to_string(CLUSTER_IDX) + 
-		"&rgb_value=" + to_string(light_color[0]) + "," + to_string(light_color[1]) + "," + to_string(light_color[2]));
 	CURLcode curl_res;
+	curl_easy_setopt(curl, CURLOPT_URL, "http://192.168.0.211/led_control.php?name=GP" + to_string(gp) + 
+		"&rgb_value=" + to_string(r) + "," + to_string(g) + "," + to_string(b));
 	curl_res = curl_easy_perform(curl);
 	if (curl_res != CURLE_OK)
 	{
 		cout << "Unable to set light..." << endl;
 	}
-	else
-		Sleep(5000);
 }
 
-vector<RoomPhotos> prepareData(cv::Size &imgsize);
-Room getSimilarRoom(cv::Mat &img, vector<RoomPhotos> &vecRP);
-double calculateDifference(cv::Mat &img1, cv::Mat &img2);
+void setLight(CURL* curl, Room room)
+{
+	CURLcode curl_res;
+	int DELAY = 1500;
+	switch (room)
+	{
+			
+		case DINING:
+			cout << "Changing to dining lights..." << endl;
+			sendUrl(curl, 3, 255, 60, 60);
+			Sleep(DELAY);
+			sendUrl(curl, 4, 255, 60, 60);
+			Sleep(DELAY);
+			sendUrl(curl, 6, 235, 50, 0);
+			Sleep(DELAY);
+			sendUrl(curl, 5, 255, 60, 60);
+			Sleep(DELAY);
+			sendUrl(curl, 1, 255, 60, 60);
+			Sleep(DELAY);
+			sendUrl(curl, 2, 255, 60, 60);
+			Sleep(DELAY);
+			sendUrl(curl, 8, 255, 40, 40);
+			Sleep(DELAY);
+			sendUrl(curl, 7, 255, 40, 40);
+			Sleep(DELAY);
+			break;
+		case UNDEFINED:
+		case LIVING:
+			cout << "Changing to living lights..." << endl;
+			sendUrl(curl, 3, 235, 50, 0);
+			Sleep(DELAY);
+			sendUrl(curl, 4, 235, 50, 0);
+			Sleep(DELAY);
+			sendUrl(curl, 6, 255, 70, 50);
+			Sleep(DELAY);
+			sendUrl(curl, 5, 235, 50, 0);
+			Sleep(DELAY);
+			sendUrl(curl, 1, 235, 50, 0);
+			Sleep(DELAY);
+			sendUrl(curl, 2, 255, 70, 0);
+			Sleep(DELAY);
+			sendUrl(curl, 8, 255, 70, 0);
+			Sleep(DELAY);
+			sendUrl(curl, 7, 255, 70, 0);
+			Sleep(DELAY);
+			break;
+		case STUDY:
+			cout << "Changing to study lights..." << endl;
+			sendUrl(curl, 3, 50, 50, 100);
+			Sleep(DELAY);
+			sendUrl(curl, 4, 50, 50, 100);
+			Sleep(DELAY);
+			sendUrl(curl, 6, 255, 70, 50);
+			Sleep(DELAY);
+			sendUrl(curl, 5, 50, 50, 100);
+			Sleep(DELAY);
+			sendUrl(curl, 1, 255, 180, 180);
+			Sleep(DELAY);
+			sendUrl(curl, 2, 255, 180, 180);
+			Sleep(DELAY);
+			sendUrl(curl, 8, 255, 180, 180);
+			Sleep(DELAY);
+			sendUrl(curl, 7, 255, 180, 180);
+			Sleep(DELAY);
+			break;
+		case ON:
+			cout << "Switching on..." << endl;
+			for (int i = 1; i <= 8; i++)
+			{
+				sendUrl(curl, i, 255, 255, 255);
+				Sleep(DELAY);
+			}
+			break;
+		case OFF:
+			cout << "Switching off..." << endl;
+			for (int i = 1; i <= 8; i++)
+			{
+				sendUrl(curl, i, 0, 0, 0);
+				Sleep(DELAY);
+			}
+			break;
+		default:
+			cout << "Unknown style" << endl;
+			return;
+	}
+}
+
+vector<RoomPhotos> prepareData(){
+	//Use full resolution for rectcosAngle extraction, resize results
+	vector<RoomPhotos> vecRP;
+	vecRP.reserve(100);
+	cv::Size TRAIN_IMAGE_SIZE(640, 480);
+
+	string wkdir = "D:/TrainData/";
+	string background = wkdir + "background.jpg";
+	cv::Mat bg_gray = cv::imread(background, CV_LOAD_IMAGE_GRAYSCALE);
+
+	for (int k = 0; k < 3; k++)
+	{
+		vecS namesNE;
+		string imgName = wkdir + getString(static_cast<Room>(k)) + "/*.png";
+		int imgNum = CmFile::GetNamesNE(imgName, namesNE);
+		for (int i = 0; i < imgNum; i++)
+		{
+			RoomPhotos temp;
+			cv::Mat train;
+			struct stat st;
+
+			if (stat((wkdir + getString(static_cast<Room>(k)) + "/" + namesNE[i] + ".png").c_str(), &st) == 0)
+			{
+				train = cv::imread(wkdir + getString(static_cast<Room>(k)) + "/" + namesNE[i] + ".png", CV_LOAD_IMAGE_COLOR); 
+				cv::resize(train, train, TRAIN_IMAGE_SIZE);
+			}
+			else
+			{
+				cout << "Missing training data" << endl;
+				/*
+				cv::Mat gray = cv::imread(wkdir + getString(static_cast<Room>(k)) + "/" + namesNE[i] + ".jpg", CV_LOAD_IMAGE_GRAYSCALE);
+				train = drawColorRects(findRect(gray, bg_gray), gray.size());
+				//cv::resize(train, train,imgsize);
+				cv::cvtColor(train, train, CV_GRAY2BGR);
+				cv::imwrite(wkdir + getString(static_cast<Room>(k)) + "/filtered/" + namesNE[i] + "_filtered.jpg", train);
+				*/
+			}
+			temp.img = CImg<uchar>(train);
+			temp.score = 0;
+			temp.room = static_cast<Room>(k);
+			vecRP.push_back(temp);
+		}
+	}
+	return vecRP;
+}
+
+double calcScore(cv::Mat img, cv::Mat train)
+{
+	// a) resize, center and run phash on different rotations
+	// b) encode rectangle positions and orientations and compare
+	// c) template matching with multiscale multiorientation training data
+
+	cv::resize(img, img, train.size());
+	cv::Mat result;
+	double min = 1e5;
+	double max = 0.0;
+	for (auto tmpl : generateTemplates(train))
+	{
+		double this_max;
+		double this_min;
+		cv::matchTemplate(img, tmpl, result, CV_TM_CCOEFF_NORMED);
+		cv::Point max_pos;
+		cv::Point min_pos;
+		cv::minMaxLoc(result, &this_min, &this_max, &min_pos, &max_pos);
+
+		if (this_max > max)
+		{
+			max = this_max;
+		}
+	}
+	return max;
+}
+
+//Use normalized distance and normalized orientation to compare
+Room getSimilarRoom(cv::Mat &img, vector<RoomPhotos> &vecRP){
+	
+	CImg<uchar> img1 = CImg<uchar>(img);
+
+	cout << "Finding match... " << endl;
+	for (int i = 0; i < (int)vecRP.size(); i++)
+	{
+		//_ph_compare_images(img1, vecRP[i].img, vecRP[i].score);
+		vecRP[i].score = calcScore(img, vecRP[i].img.get_MAT());
+	}
+
+	RoomPhotos maxRP;
+	maxRP.score = 0;
+
+	for (auto &rp : vecRP)
+	{
+		if (rp.score > maxRP.score)	{
+			maxRP = rp;
+		}
+	}
+
+	cout << "Score: " << maxRP.score << endl;
+	if (maxRP.score < 0.5)
+	{
+		return Room::UNDEFINED;
+	}else
+	{
+		show("most_similar", cv::Mat(maxRP.img.get_MAT()));
+		return maxRP.room;
+	}
+}
+
+//TODO: Check values
+double calculateDifference(cv::Mat &img1, cv::Mat &img2){
+	cv::Mat xor;
+	cv::bitwise_xor(img1, img2, xor);
+	return cv::mean(xor)[0];
+	/*
+	CImg<uchar> imgLeft = CImg<uchar>(img1);
+	CImg<uchar> imgRight = CImg<uchar>(img2);
+
+	double pcc;
+	_ph_compare_images(imgLeft, imgRight, pcc);
+	
+	return pcc;
+	*/
+}
 
 int _tmain(int argc, _TCHAR* argv[])
 {
+	/********** Set up camera **********/
 	/*
-	const int CHAIR = 0;
-	const int TABLE = 1;
-	vector<Texture> textures(2);
-	vector<string> texture_names;
-	//texture_names.push_back("D:/chair_texture.jpg");
-	//texture_names.push_back("D:/table_texture.jpg");
-	textures[CHAIR].image = cv::imread("D:/chair_texture.jpg");
-	textures[TABLE].image = cv::imread("D:/table_texture.jpg");
-	//cv::Ptr<cv::AKAZE> p_orb = cv::AKAZE::create();
-	cv::Ptr<cv::ORB> p_orb = cv::ORB::create();
-	for (int type = 0; type < 2; type++)
-	{
-		p_orb->detectAndCompute(textures[type].image, cv::noArray(), textures[type].keypoints, textures[type].descriptors);
-
-		cv::Mat keypointFrame;
-		cv::drawKeypoints(textures[type].image, textures[type].keypoints, keypointFrame);
-		//show("keypoints - " + to_string(type), keypointFrame);
-		textures[type].max_instances = 4;
-		textures[type].color = cv::Scalar(255, 0, 0);
-		textures[type].type = type;
-	}
-	*/
-
-	/********** Test code **********/
-	/*
-	SoundController sc;
-	//sc.setRoom(STUDY);
-	//Sleep(10000);
-	//sc.setRoom(DINING);
-	cv::Mat in;
-	in = cv::imread("D:/tex_test.png", CV_LOAD_IMAGE_COLOR);
-	cv::putText(in, getCurrentTime(), cv::Point(0, in.rows), CV_FONT_HERSHEY_PLAIN, 10, cv::Scalar(255, 255, 255), 10);
-	show("text", in);
-	//findColor(in);
-	cv::waitKey();
-	sc.setRoom(DINING);
-
-	in = cv::imread("D:/shadow_test.jpg");
-	show("original", in);
-	cv::Mat mask = cv::imread("D:/mask.png", CV_LOAD_IMAGE_GRAYSCALE);
-	int DILATE_SIZE = 3;
-	cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(DILATE_SIZE, DILATE_SIZE), cv::Point(DILATE_SIZE / 2, DILATE_SIZE / 2));
-	cv::dilate(mask, mask, element);
-	cv::inpaint(in, mask, in, 3, cv::INPAINT_TELEA);
-	show("inpaint", in);
-	cv::waitKey();
-	  */
-	/*
-	cv::Mat tex_test = cv::imread("D:/tex_test.png");
-	findTexture(tex_test, textures);
-	cv::waitKey();
-	*/
-	/*
-	vector<RoomPhotos> testData = prepareData(cv::Size(640, 480));
-	cv::Mat test = cv::imread("D:/failed1.jpg", CV_LOAD_IMAGE_COLOR);
-	cout << getString(getSimilarRoom(test, testData)) << endl;
-	cv::waitKey();
-	*/
-
-	/********** Set up sound control **********/
-	IAudioEndpointVolume *audio = NULL;
-	if (!getAudio(audio))
-	{
-		return -1;
-	}
-#ifdef CURL
-	CURL* curl;
-	if (!initCurl(curl))
-		return -1;
-	setLight(curl, "dining");
-	setLight(curl, "living");
-	setLight(curl, "study");
-	setLight(curl, "off");
-#endif
 	PrintBuildInfo();
 	BusManager busMgr;
     unsigned int numCameras;
@@ -706,6 +771,26 @@ int _tmain(int argc, _TCHAR* argv[])
 	CheckError(cam.GetProperty(&gammaProp));
 	cout << "gamma = " << gammaProp.absValue << endl;
 
+	Property whitebalanceProp;
+	whitebalanceProp.type = WHITE_BALANCE;
+	whitebalanceProp.onOff = false;
+	whitebalanceProp.autoManualMode = true;
+	CheckError(cam.SetProperty(&whitebalanceProp));
+
+	Property shutterProp;
+	shutterProp.type = SHUTTER;
+	shutterProp.autoManualMode = true;
+	shutterProp.absControl = true;
+	shutterProp.absValue = 0.5;
+	CheckError(cam.SetProperty(&shutterProp));
+
+	Property gainProp;
+	gainProp.type = GAIN;
+	gainProp.autoManualMode = true;
+	gainProp.absControl = true;
+	gainProp.absValue = 0;
+	CheckError(cam.SetProperty(&gainProp));
+
 	const int WIDTH = min(floor(sqrt(maxPacketSize * 1000)), (double)min(imageInfo.maxWidth, imageInfo.maxHeight));
 	const int HEIGHT = WIDTH;
 	GigEImageSettings imageSettings;
@@ -735,51 +820,38 @@ int _tmain(int argc, _TCHAR* argv[])
     cout << "Frame rate is " << fixed << setprecision(2) << frameProp.absValue << " fps" << endl; 
 
 	
-	Image rawImage;  
+	MultithreadCam multicam(&cam, imgSize);
+#ifdef SAVE
+	VideoRecorder recorder(&multicam);
+#endif
+	/********************/
+
+#ifdef LIGHT
+	CURL* curl;
+	if (!initCurl(curl))
+	{
+		cout << "Cannot control lighting" << endl;
+		return -1;
+	}
+#endif
+	
+	SoundController sound_controller;
+
+	vector<RoomPhotos> vecRP = prepareData();
+	
 	cv::Mat lastFrame, lastStableFrame;
 	bool isProcessed = false;
 	int numUnchanged = 0;
 
 	Room lastLighting = UNDEFINED;
-
-	vector<RoomPhotos> vecRP = prepareData();
-
-#ifdef SAVE
-	deque<string> records;
-	const cv::Size SAVE_FRAME_SIZE = cv::Size(480, 680);
-	cv::VideoWriter outputVideo;
-	int num_frames = 0;
-	int MAX_FRAMES = 24 * 60; // 1 min record
-	int CODEC = cv::VideoWriter::fourcc('F', 'M', 'P', '4');
-	time_t curr_time = time(NULL);
-	time_t prev_time = curr_time;
-	string record = generateRecordName();
-	outputVideo.open(record, CODEC, 24, SAVE_FRAME_SIZE, true);
-	records.push_back(record);
-	if (!outputVideo.isOpened())
-	{
-		cout << "Could not open record for writing... exiting" << endl;
-		system("pause");
-		exit(-1);
-	}
-#endif
+	//setLight(curl, lastLighting);
 
     // Retrieve an image
 	cv::Mat NowFrame;
 	cv::Mat background;
 
-	CheckError(cam.RetrieveBuffer( &rawImage ));
-	// Get the raw image dimensions
-	PixelFormat pixFormat;
-	unsigned int rows, cols, stride;
-	rawImage.GetDimensions( &rows, &cols, &stride, &pixFormat );
-	cout << "Pixel format = " << pixFormat << endl;
-#ifdef COLOR
-	NowFrame = cv::Mat(rows, cols, CV_8UC3, rawImage.GetData()).clone();
-	cv::cvtColor(NowFrame, NowFrame, CV_RGB2BGR);
-#else
+#ifndef COLOR
 	NowFrame = cv::Mat(rows, cols, CV_8UC1, rawImage.GetData()).clone();
-#endif
 
 	// If background image exists and less than 1 hour old, use it
 	struct stat st;
@@ -795,11 +867,12 @@ int _tmain(int argc, _TCHAR* argv[])
 		cv::imwrite("background.jpg", background);
 	}
 	cv::resize(background, background, NowFrame.size());
+#endif
 	
 	cv::Mat bg_mask;
 	cv::Ptr<cv::BackgroundSubtractor> p_mog2 = cv::createBackgroundSubtractorMOG2();	
 
-	const int MIN_UNCHANGED = 3 * frameProp.absValue;
+	const int MIN_UNCHANGED = 15;
 	const float DIFF_THRESH = 3.0;
 	vector<cv::Mat> stableFrames(MIN_UNCHANGED);
 	cv::Mat prev_rect_mask;
@@ -807,60 +880,127 @@ int _tmain(int argc, _TCHAR* argv[])
 	vector<ColorRect> prev_rects;
 
 	//TODO: Set this parameter
-	const float MAX_MOVE = 10;
+	const float MAX_MOVE = 100;
 	vector<cv::Point2f> ROI_PTS2f = getROIPts2f();
 
-	cv::Scalar CHAIR_COLOR1(0, 15, 0);
-	cv::Scalar CHAIR_COLOR2(40, 90, 75);
+	//6:00pm
+	/*
 	cv::Scalar TABLE_COLOR1(0, 0, 0);
-	cv::Scalar TABLE_COLOR2(50, 20, 30);
-	cv::Scalar TABLE_COLOR3(120, 15, 50);
-	cv::Scalar TABLE_COLOR4(130, 45, 90);
-	vector<tuple<cv::Scalar, cv::Scalar>> CHAIR_COLORS;
-	CHAIR_COLORS.push_back(tuple<cv::Scalar, cv::Scalar>(CHAIR_COLOR1, CHAIR_COLOR2));
-	vector<tuple<cv::Scalar, cv::Scalar>> TABLE_COLORS;
-	TABLE_COLORS.push_back(tuple<cv::Scalar, cv::Scalar>(TABLE_COLOR1, TABLE_COLOR2));
-	TABLE_COLORS.push_back(tuple<cv::Scalar, cv::Scalar>(TABLE_COLOR3, TABLE_COLOR4));
-/*
+	cv::Scalar TABLE_COLOR2(40, 40, 60);
+	cv::Scalar CHAIR_COLOR1(0, 40, 0);
+	cv::Scalar CHAIR_COLOR2(40, 100, 75);
+	*/
+	//6:30pm
+	/*
+	cv::Scalar TABLE_COLOR1(0, 0, 0);
+	cv::Scalar TABLE_COLOR2(40, 50, 60);
+	cv::Scalar CHAIR_COLOR1(0, 50, 0);
+	cv::Scalar CHAIR_COLOR2(30, 120, 75);
+	*/
+	//7:00pm
+	/*
+	cv::Scalar TABLE_COLOR1(0, 0, 0);
+	cv::Scalar TABLE_COLOR2(255, 50, 60);
+	cv::Scalar CHAIR_COLOR1(0, 30, 0);
+	cv::Scalar CHAIR_COLOR2(30, 120, 75);
+	*/												 
+	cv::Scalar TABLE_COLOR1_1800(0, 0, 0);
+	cv::Scalar TABLE_COLOR2_1800(40, 50, 60);
+	cv::Scalar CHAIR_COLOR1_1800(0, 40, 0);
+	cv::Scalar CHAIR_COLOR2_1800(40, 120, 75);
+
+	//Living
+	cv::Scalar LIVING_TABLE_COLOR1(0, 50, 0);
+	cv::Scalar LIVING_TABLE_COLOR2(15, 175, 75);
+	cv::Scalar LIVING_CHAIR_COLOR1(0, 150, 50);
+	cv::Scalar LIVING_CHAIR_COLOR2(15, 200, 175);
+
+	//Dining
+	cv::Scalar DINING_TABLE_COLOR1(0, 50, 0);
+	cv::Scalar DINING_TABLE_COLOR2(15, 125, 75);
+	cv::Scalar DINING_CHAIR_COLOR1(0, 125, 50);
+	cv::Scalar DINING_CHAIR_COLOR2(15, 175, 150);
+
+	//Study
+	cv::Scalar STUDY_TABLE_COLOR1(0, 0, 0);
+	cv::Scalar STUDY_TABLE_COLOR2(255, 255, 50);
+	cv::Scalar STUDY_CHAIR_COLOR1(0, 0, 25);
+	cv::Scalar STUDY_CHAIR_COLOR2(30, 75, 100);
+
+	vector<tuple<cv::Scalar, cv::Scalar>> CHAIR_COLORS(NUM_ROOMS);
+	vector<tuple<cv::Scalar, cv::Scalar>> TABLE_COLORS(NUM_ROOMS);
+	CHAIR_COLORS[LIVING] = tuple<cv::Scalar, cv::Scalar>(LIVING_CHAIR_COLOR1, LIVING_CHAIR_COLOR2);
+	TABLE_COLORS[LIVING] = tuple<cv::Scalar, cv::Scalar>(LIVING_TABLE_COLOR1, LIVING_TABLE_COLOR2);
+	CHAIR_COLORS[UNDEFINED] = tuple<cv::Scalar, cv::Scalar>(LIVING_CHAIR_COLOR1, LIVING_CHAIR_COLOR2);
+	TABLE_COLORS[UNDEFINED] = tuple<cv::Scalar, cv::Scalar>(LIVING_TABLE_COLOR1, LIVING_TABLE_COLOR2);
+	CHAIR_COLORS[DINING] = tuple<cv::Scalar, cv::Scalar>(DINING_CHAIR_COLOR1, DINING_CHAIR_COLOR2);
+	TABLE_COLORS[DINING] = tuple<cv::Scalar, cv::Scalar>(DINING_TABLE_COLOR1, DINING_TABLE_COLOR2);
+	CHAIR_COLORS[STUDY] = tuple<cv::Scalar, cv::Scalar>(STUDY_CHAIR_COLOR1, STUDY_CHAIR_COLOR2);
+	TABLE_COLORS[STUDY] = tuple<cv::Scalar, cv::Scalar>(STUDY_TABLE_COLOR1, STUDY_TABLE_COLOR2);
+
+	/*********************************************/
+	//SUMMER EDIT HERE
+	Room current_room = OFF;//STUDY DINING LIVING
+	/***********************************************/
+	//setLight(curl, current_room);
+	sound_controller.setRoom(current_room);
 	while(true)
 	{
-		CheckError(cam.RetrieveBuffer(&rawImage));
-		cv::Mat f = cv::Mat(rows, cols, CV_8UC3, rawImage.GetData());
-		cv::cvtColor(f, f, CV_RGB2BGR);
-		cv::Mat rectFrame = drawColorRects(findColor(f, TABLE_COLOR1, TABLE_COLOR2), f.size());
-		show("rects", rectFrame);
-		cv::waitKey(500);
+		setLight(curl, current_room);
+		Sleep(2000);
 	}
-*/
+
+	/*
+	while(true)
+	{
+		cv::Mat f = multicam.getImage();
+		cv::cvtColor(f, f, CV_RGB2BGR);
+		cv::Scalar mean = cv::mean(f,  getROIMask());
+		cv::Mat rectFrame = drawColorRects(findColor(f, TABLE_COLORS[DINING], cv::Scalar(255, 255, 255)), f.size());
+		cv::waitKey(100);
+	}
+	*/
 
 	while (true)
     {
-	 	CheckError(cam.RetrieveBuffer( &rawImage ));
+		time_t curr_time = time(NULL);
+		tm* curr_time_tm = localtime(&curr_time);
+		int hour = curr_time_tm->tm_hour;
+		cout << hour << endl;
+#ifdef TIMER
+		if (hour < 18 || hour >= 22)
+		{
+#ifdef LIGHT
+			if (hour >= 7 && hour < 18) setLight(curl, OFF);
+			else if (hour >= 22 || hour < 7) setLight(curl, ON);
+#endif
+			sound_controller.setRoom(UNDEFINED);
+			cout << "Not time yet!" << endl;
+			Sleep(1000 * 60);
+			continue;
+		}
+#endif
 #ifdef COLOR
-		NowFrame = cv::Mat(rows, cols, CV_8UC3, rawImage.GetData()).clone();
+		//NowFrame = multicam.getImage();
 		cv::cvtColor(NowFrame, NowFrame, CV_RGB2BGR);
 #else
 		NowFrame = cv::Mat(rows, cols, CV_8UC1, rawImage.GetData()).clone();
 #endif
 
 		cv::Mat roiFrame = NowFrame.clone();
-		
-		p_mog2->apply(NowFrame, bg_mask);
-		//show("bg_mask", bg_mask);
-	
-		//TODO: Get background under different illumination
-/*
-		if (!prev_rect_mask.empty() && !prevFrame.empty())
+
+		vector<ColorRect> chair_rects;
+		vector<ColorRect> table_rects;
+		if (hour > 18 && hour < 19)
 		{
-			int DILATE_SIZE = 3;
-			cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(DILATE_SIZE, DILATE_SIZE), cv::Point(DILATE_SIZE / 2, DILATE_SIZE / 2));
-			cv::dilate(prev_rect_mask, prev_rect_mask, element);
-			//cout << "prev size = " << prevFrame.size() << ", prev_mask size = " << prev_rect_mask.size() << ", bg size = " << background.size() << endl;
-			cv::inpaint(prevFrame, prev_rect_mask, background, 3, cv::INPAINT_TELEA);
+			chair_rects = findColor(NowFrame, CHAIR_COLOR1_1800, CHAIR_COLOR2_1800, cv::Scalar(0, 0, 255));// = findTexture(NowFrame, textures); 
+			table_rects = findColor(NowFrame, TABLE_COLOR1_1800, TABLE_COLOR2_1800, cv::Scalar(255, 0, 0));// = findRect(NowFrame, background);
 		}
-*/
-		vector<ColorRect> chair_rects = findColor(NowFrame, CHAIR_COLOR1, CHAIR_COLOR2, cv::Scalar(0, 0, 255));// = findTexture(NowFrame, textures); 
-		vector<ColorRect> table_rects = findColor(NowFrame, TABLE_COLOR1, TABLE_COLOR2, cv::Scalar(255, 0, 0));// = findRect(NowFrame, background);
+		else
+		{
+			chair_rects = findColor(NowFrame, CHAIR_COLORS[lastLighting], cv::Scalar(0, 0, 255));// = findTexture(NowFrame, textures); 
+			table_rects = findColor(NowFrame, TABLE_COLORS[lastLighting], cv::Scalar(255, 0, 0));// = findRect(NowFrame, background);
+		}
 		//cout << chair_rects.size() << endl;
 		cv::Mat chairFrame = drawColorRects(chair_rects, NowFrame.size());
 		show("chair", chairFrame);
@@ -878,15 +1018,23 @@ int _tmain(int argc, _TCHAR* argv[])
 				//TODO: Use min_element instead
 				for (auto now_rect = now_rects.begin(); now_rect != now_rects.end(); now_rect++)
 				{
+					//Check prev_rect->rect.center is inside now_rect->rect
 					if (cv::norm(prev_rect->rect.center - now_rect->rect.center) < MAX_MOVE)
 					{
 						foundMatch = true;
-						if (cv::pointPolygonTest(ROI_PTS2f, now_rect->rect.center, true) > 0)
+						if (cv::pointPolygonTest(ROI_PTS2f, now_rect->rect.center, true) > 10)
 						{	
 							true_rects.push_back(*now_rect);
-							//now_rect = now_rects.erase(now_rect); //Remove rect from future matching and correct now_rect iterator
+							now_rect = now_rects.erase(now_rect); //Remove rect from future matching and correct now_rect iterator
 						}
 						break;
+					}
+					vector<cv::Point2f> now_rect_pts(4);
+					now_rect->rect.points(&now_rect_pts[0]);
+					if (cv::pointPolygonTest(now_rect_pts, prev_rect->rect.center, false) > 0)
+					{
+						foundMatch = true;
+						true_rects.push_back(*now_rect);
 					}
 				}
 				if (!foundMatch)
@@ -935,6 +1083,7 @@ int _tmain(int argc, _TCHAR* argv[])
 			// needProcess
 			if (numUnchanged >= MIN_UNCHANGED && isProcessed == false)
 			{
+				cout << "numUnchanged = " << numUnchanged << endl;
 				cv::Mat averageFrame = cv::Mat::zeros(combinedFrame.size(), combinedFrame.type());
 				for (auto frame : stableFrames)
 				{
@@ -951,13 +1100,18 @@ int _tmain(int argc, _TCHAR* argv[])
 						{
 							cout<< getString(nowLighting) <<endl;
 							lastLighting = nowLighting;
-							setSound(audio, nowLighting);
-#ifdef CURL
+							sound_controller.setRoom(nowLighting);
+#ifdef LIGHT
 							setLight(curl, nowLighting);
 #endif
 						}
 						else
+						{
 							cout << "Equal to lastLighting" << endl;
+#ifdef LIGHT
+							setLight(curl, lastLighting);
+#endif
+						}
 
 						isProcessed = true;
 						lastStableFrame = averageFrame.clone();
@@ -969,10 +1123,10 @@ int _tmain(int argc, _TCHAR* argv[])
 					Room nowLighting = getSimilarRoom(averageFrame, vecRP);
 					lastLighting = nowLighting;
 					cout<< getString(nowLighting) <<endl;
-					setSound(audio, nowLighting);
-	#ifdef CURL
+					sound_controller.setRoom(nowLighting);
+#ifdef LIGHT
 					setLight(curl, nowLighting);
-	#endif
+#endif
 					isProcessed = true;
 				}	
 			}
@@ -982,167 +1136,17 @@ int _tmain(int argc, _TCHAR* argv[])
 		cv::cvtColor(lastFrame.clone(), prev_rect_mask, CV_BGR2GRAY, 1);
  		prevFrame = NowFrame.clone();
 
-
-#ifdef SAVE
-		curr_time = time(NULL);
-		if (curr_time - prev_time >= 1)
-		{
-			cv::Mat saveFrame;
-			cv::resize(NowFrame, saveFrame, SAVE_FRAME_SIZE);
-			cv::putText(saveFrame, getCurrentTime(), cv::Point(0, saveFrame.rows), CV_FONT_HERSHEY_PLAIN, 10, cv::Scalar(255, 255, 255), 10);
-			outputVideo.write(saveFrame);
-			prev_time = curr_time;
-			num_frames++;
-			if (num_frames > MAX_FRAMES)
-			{
-				string record = generateRecordName();
-				outputVideo.open(record, CODEC, 24, SAVE_FRAME_SIZE, false);
-				records.push_back(record);
-				if (records.size() > 10)
-				{
-					remove(records[0].c_str());
-					records.pop_front();
-				}
-				num_frames = 0;
-			}
-		}
-#endif
-        if(cv::waitKey(300) == 27) break;
+        if(cv::waitKey(100) == 27) break;
     }
     cout << endl;
 	cout << "Finished grabbing images" << endl; 
 
     // Stop capturing images
-	CheckError(cam.StopCapture());  
+	//CheckError(cam.StopCapture());  
 
     // Disconnect the camera
-    CheckError(cam.Disconnect()); 
+    //CheckError(cam.Disconnect()); 
 
 //	system("pause");
 	return 0;
-}
-
-
-vector<RoomPhotos> prepareData(){
-	//Use full resolution for rectcosAngle extraction, resize results
-	vector<RoomPhotos> vecRP;
-	vecRP.reserve(100);
-	cv::Size TRAIN_IMAGE_SIZE(640, 480);
-
-	string wkdir = "D:/TrainData/";
-	string background = wkdir + "background.jpg";
-	cv::Mat bg_gray = cv::imread(background, CV_LOAD_IMAGE_GRAYSCALE);
-
-	for (int k = 0; k < 3; k++)
-	{
-		vecS namesNE;
-		string imgName = wkdir + getString(static_cast<Room>(k)) + "/*.png";
-		int imgNum = CmFile::GetNamesNE(imgName, namesNE);
-		for (int i = 0; i < imgNum; i++)
-		{
-			RoomPhotos temp;
-			cv::Mat train;
-			struct stat st;
-
-			if (stat((wkdir + getString(static_cast<Room>(k)) + "/" + namesNE[i] + ".png").c_str(), &st) == 0)
-			{
-				train = cv::imread(wkdir + getString(static_cast<Room>(k)) + "/" + namesNE[i] + ".png", CV_LOAD_IMAGE_COLOR); 
-				cv::resize(train, train, TRAIN_IMAGE_SIZE);
-			}
-			else
-			{
-				cout << "Missing training data" << endl;
-				/*
-				cv::Mat gray = cv::imread(wkdir + getString(static_cast<Room>(k)) + "/" + namesNE[i] + ".jpg", CV_LOAD_IMAGE_GRAYSCALE);
-				train = drawColorRects(findRect(gray, bg_gray), gray.size());
-				//cv::resize(train, train,imgsize);
-				cv::cvtColor(train, train, CV_GRAY2BGR);
-				cv::imwrite(wkdir + getString(static_cast<Room>(k)) + "/filtered/" + namesNE[i] + "_filtered.jpg", train);
-				*/
-			}
-			temp.img = CImg<uchar>(train);
-			temp.score = 0;
-			temp.room = static_cast<Room>(k);
-			vecRP.push_back(temp);
-		}
-	}
-	return vecRP;
-}
-
-double calcScore(cv::Mat img, cv::Mat train)
-{
-	// a) resize, center and run phash on different rotations
-	// b) encode rectcosAngle positions and orientations and compare
-	// c) template matching with multiscale multiorientation training data
-
-	cv::resize(img, img, train.size());
-	cv::Mat result;
-	double min = 1e5;
-	double max = 0.0;
-	for (auto tmpl : generateTemplates(train))
-	{
-		double this_max;
-		double this_min;
-		cv::matchTemplate(img, tmpl, result, CV_TM_CCOEFF_NORMED);
-		cv::Point max_pos;
-		cv::Point min_pos;
-		cv::minMaxLoc(result, &this_min, &this_max, &min_pos, &max_pos);
-
-		if (this_max > max)
-		{
-			max = this_max;
-		}
-	}
-	return max;
-}
-
-
-//Use normalized distance and normalized orientation to compare
-Room getSimilarRoom(cv::Mat &img, vector<RoomPhotos> &vecRP){
-	
-	CImg<uchar> img1 = CImg<uchar>(img);
-
-	cout << "Finding match... " << endl;
-	for (int i = 0; i < (int)vecRP.size(); i++)
-	{
-		//_ph_compare_images(img1, vecRP[i].img, vecRP[i].score);
-		vecRP[i].score = calcScore(img, vecRP[i].img.get_MAT());
-	}
-
-	RoomPhotos maxRP;
-	maxRP.score = 0;
-
-	for (auto &rp : vecRP)
-	{
-		if (rp.score > maxRP.score)	{
-			maxRP = rp;
-		}
-	}
-
-	cout << "Score: " << maxRP.score << endl;
-	if (maxRP.score < 0.6)
-	{
-		return Room::UNDEFINED;
-	}else
-	{
-		show("most_similar", cv::Mat(maxRP.img.get_MAT()));
-		return maxRP.room;
-	}
-
-}
-
-//TODO: Check values
-double calculateDifference(cv::Mat &img1, cv::Mat &img2){
-	cv::Mat xor;
-	cv::bitwise_xor(img1, img2, xor);
-	return cv::mean(xor)[0];
-	/*
-	CImg<uchar> imgLeft = CImg<uchar>(img1);
-	CImg<uchar> imgRight = CImg<uchar>(img2);
-
-	double pcc;
-	_ph_compare_images(imgLeft, imgRight, pcc);
-	
-	return pcc;
-	*/
 }
