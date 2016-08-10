@@ -7,7 +7,6 @@ Distinguish table and chair based on size
 Use adaptiveThreshold
 */
 
-#define COLOR
 #define SAVE
 #define LIGHT
 //#define TIMER
@@ -27,206 +26,6 @@ double cosAngle(cv::Point pt1, cv::Point pt2, cv::Point pt0 )
     return (dx1*dx2 + dy1*dy2)/sqrt((dx1*dx1 + dy1*dy1)*(dx2*dx2 + dy2*dy2) + 1e-10);
 }
 	 
-vector<ColorRect> findTexture(cv::Mat input, vector<Texture> textures)
-{
-	cv::Mat texFrame = cv::Mat::zeros(input.size(), CV_8UC3);
-	int num_types = textures.size();
-	vector<cv::KeyPoint> keypoints;
-	vector<tuple<vector<cv::KeyPoint>, vector<cv::KeyPoint>>> matched_keypoints(num_types);
-	cv::Mat descriptors;
-	//cv::Ptr<cv::AKAZE> p_orb = cv::AKAZE::create();
-	cv::Ptr<cv::ORB> p_orb = cv::ORB::create();
-	cv::Ptr<cv::DescriptorMatcher> p_matcher = cv::DescriptorMatcher::create("BruteForce-Hamming");
-	p_orb->detectAndCompute(input, cv::Mat(), keypoints, descriptors);
-	int min_dist = 1e5;
-	vector<ColorRect> color_rects;
-	for (int type = 0; type < num_types; type++)
-	{
-		vector<vector<cv::DMatch>> this_matches;
-		vector<cv::DMatch> good_matches;
-		p_matcher->knnMatch(descriptors, textures[type].descriptors, this_matches, 2);
-		float total_dist = 0;
-		for (auto best_matches : this_matches)
-		{
-			if (best_matches[0].distance < 0.8 * best_matches[1].distance) //ratio test
-			{
-				int idx = get<0>(matched_keypoints[type]).size();
-				good_matches.push_back(cv::DMatch(idx, idx, best_matches[0].distance));
-				get<0>(matched_keypoints[type]).push_back(keypoints[best_matches[0].queryIdx]);
-				get<1>(matched_keypoints[type]).push_back(textures[type].keypoints[best_matches[0].trainIdx]);
-				total_dist += best_matches[0].distance;
-			}
-		}
-		if (get<0>(matched_keypoints[type]).size() < 4)
-		{
-			//cout << "Not enough matches: " << type << endl;
-			continue;
-		}
-		cv::Mat matchFrame;
-		cv::drawMatches(input, get<0>(matched_keypoints[type]), textures[type].image, get<1>(matched_keypoints[type]), good_matches, matchFrame);
-		//show("match - " + to_string(type), matchFrame);
-		//TODO: partition?
-		vector<tuple<vector<cv::Point2f>, vector<cv::Point2f>>> clusters(textures[type].max_instances);
-		vector<int> labels;
-		vector<cv::Point2f> cluster_pts;
-		for (auto keypoint : get<0>(matched_keypoints[type]))
-		{
-			cluster_pts.push_back(keypoint.pt);
-		}
-		double compactness = cv::kmeans(cluster_pts, textures[type].max_instances, labels, cv::TermCriteria(cv::TermCriteria::EPS, -1, 1.0), 3, cv::KMEANS_PP_CENTERS);
-		for (int i = 0; i < labels.size(); i++)
-		{
-			get<0>(clusters[labels[i]]).push_back(get<0>(matched_keypoints[type])[i].pt);
-			get<1>(clusters[labels[i]]).push_back(get<1>(matched_keypoints[type])[i].pt);
-		}
-
-		cv::Mat clusterFrame = input.clone();
-		cv::Mat homoFrame = input.clone();
-		for (auto cluster : clusters)
-		{
-			cv::Scalar cluster_color = cv::Scalar(rand() % 255, rand() % 255, rand() % 255);
-			for (int i = 0; i < get<0>(cluster).size(); i++)
-			{
-				circle(clusterFrame, get<0>(cluster)[i], 20, cluster_color, 10);
-			}
-			cv::Mat homography;
-			homography = cv::findHomography(get<1>(cluster), get<0>(cluster), CV_RANSAC);
-			vector<cv::Point2f> object_bb;					 
-			int width = textures[type].image.cols;
-			int height = textures[type].image.rows;
-			vector<cv::Point2f> tex_bb;
-			tex_bb.push_back(cv::Point2f(0, 0));
-			tex_bb.push_back(cv::Point2f(width, 0));
-			tex_bb.push_back(cv::Point2f(width, height));
-			tex_bb.push_back(cv::Point2f(0, height));
-			if (!homography.empty())
-			{
-				cv::perspectiveTransform(tex_bb, object_bb, homography);
-				//cout << homography << endl;
-				//cout << object_bb << endl;
-				assert(object_bb.size() == 4);
-				cv::Point pts[4];
-				for (int i = 0; i < 4; i++)
-				{
-					pts[i] = object_bb[i];
-					circle(homoFrame, pts[i], 20, cv::Scalar(0, 0, 255), 10);
-				}
-				double maxCos = 0.0;
-				for (int i = 0; i < 4; i++)
-				{
-					maxCos = std::max(maxCos, abs(cosAngle(pts[i], pts[(i+2) % 4], pts[(i+1) % 4])));
-				}
-				if (maxCos < 0.5)
-				{
-					cv::fillConvexPoly(homoFrame, pts, 4, textures[type].color);
-					cv::fillConvexPoly(texFrame, pts, 4, textures[type].color);
-					ColorRect color_rect;
-					color_rect.rect = cv::RotatedRect(cv::Point2f(pts[0]), cv::Point2f(pts[1]), cv::Point2f(pts[2]));
-					color_rect.color = textures[type].color;
-					color_rects.push_back(color_rect);
-				}
-				// else cout << "Bad homography matrix" << endl;
-			}
-			//else cout << "Homography failed" << endl;
-		}
-		//show("cluster - " + to_string(type), clusterFrame);
-		//show("homo - " + to_string(type), homoFrame);
-	}
-	show("tex", texFrame);
-	return color_rects;
-}
-
-vector<ColorRect> findRect(cv::Mat input, cv::Mat background)
-{
-	if (background.size() != input.size())
-	{
-		cout << "Warning: Auto-resizing background to " << input.size() << endl;
-		cv::resize(background, background, input.size());
-	}
-	show("input", input);
-	show("background", background);
-	cv::Mat filteredFrame;
-
-	//TODO: Perhaps use absdiff
-
-	//cv::subtract(input, background, filteredFrame);
-	//filteredFrame = cv::abs(filteredFrame);
-	cv::absdiff(input, background, filteredFrame);
-	show("subtracted", filteredFrame);
-
-	//cv::threshold(filteredFrame, filteredFrame, 100, 255, CV_THRESH_BINARY); //Emphasize all edges
-	cv::medianBlur(filteredFrame, filteredFrame, 11);
-	cv::adaptiveThreshold(filteredFrame, filteredFrame, 255, cv::ADAPTIVE_THRESH_GAUSSIAN_C, cv::THRESH_BINARY, 13, -1);
-	//TODO: Consider erode + dilate
-	show("filtered", filteredFrame);
-
-	cv::Mat edgeFrame;
-	cv::Canny(filteredFrame, edgeFrame, 0, 300, 3, true);
-	int DILATE_SIZE = 3;
-	//cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3), cv::Point(1, 1));
-	cv::Mat element = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(DILATE_SIZE, DILATE_SIZE), cv::Point(DILATE_SIZE / 2, DILATE_SIZE / 2));
-	cv::dilate(edgeFrame, edgeFrame, element); // Fill holes in contours
-	//TODO: Do line thinning here?
-	show("edges", edgeFrame);
-
-	vector<vector<cv::Point>> contours;
-	vector<cv::Vec4i> contour_hierarchy;
-	//cv::findContours(edgeFrame, contours, contour_hierarchy, CV_RETR_LIST, CV_CHAIN_APPROX_NONE);
-	cv::findContours(edgeFrame, contours, contour_hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
-	cv::Mat contourFrame = cv::Mat::zeros(input.size(), input.type());
-	cv::drawContours(contourFrame, contours, -1, cv::Scalar(255, 255, 255));
-	show("contours", contourFrame);
-
-	cv::Mat rectFrame = cv::Mat::zeros(input.size(), input.type());
-	cv::Mat polyFrame = cv::Mat::zeros(input.size(), input.type());
-	vector<ColorRect> color_rects;
-	for (auto contour : contours)
-	{
-		vector<cv::Point> polygon;
-		cv::approxPolyDP(contour, polygon, 0.05 * cv::arcLength(cv::Mat(contour), true), true);
-		//cv::convexHull(contour, polygon);
-		double maxCos = 0.0;
-		for (int i = 0; i < polygon.size(); i++)
-		{
-			int size = polygon.size();
-			maxCos = std::max(maxCos, abs(cosAngle(polygon[i], polygon[(i+2) % size], polygon[(i+1) % size])));
-		}
-		int npt[] = {polygon.size()}; //Because fillPoly assumes an array polygons...
-		const cv::Point* ppt[1] = {&polygon[0]};
-		cv::fillPoly(polyFrame, ppt, npt, 1, cv::Scalar(255, 255, 255));
-
-		cv::RotatedRect rect;
-		rect = cv::minAreaRect(polygon);
-
-		if (rect.size.height > 25 && rect.size.width > 25)
-		{
-			//Consider using average cosAngles
-			if (polygon.size() == 4 && maxCos < 0.5)
-			{
-				//TODO: The following parameters should be fine-tuned
-				// Perhaps sort rect sizes and find outliers
-				//if (rect.size.height > 50 && rect.size.width > 50 && cv::contourArea(polygon) / rect.size.area() > 0.9)
-				if (true)
-				{
-					cv::Point2f pts2f[4];
-					rect.points(pts2f);
-					cv::Point pts[4];
-					for (int i = 0; i < 4; i++) pts[i] = pts2f[i];
-					cv::fillConvexPoly(rectFrame, &pts[0], 4, cv::Scalar(255, 255, 255));
-					ColorRect color_rect;
-					color_rect.rect = rect;
-					color_rect.color = cv::Scalar(255, 255, 255);
-					color_rects.push_back(color_rect);
-				}
-			}
-		}
-	}
-	show("polygon", polyFrame);
-	show("rect", rectFrame);
-	//cv::waitKey();
-	return color_rects;
-}
-
 vector<ColorRect> findColor(cv::Mat input, cv::Scalar color1, cv::Scalar color2, cv::Scalar rect_color)
 {
 	bool debug = true;
@@ -660,25 +459,6 @@ int _tmain(int argc, _TCHAR* argv[])
     // Retrieve an image
 	cv::Mat NowFrame;
 	cv::Mat background;
-
-#ifndef COLOR
-	NowFrame = cv::Mat(rows, cols, CV_8UC1, rawImage.GetData()).clone();
-
-	// If background image exists and less than 1 hour old, use it
-	struct stat st;
-	if (stat("background.jpg", &st) == 0 && time(NULL) - st.st_mtime < 12*60*60)
-	{
-		cout << "Using old background" << endl;
-		background = cv::imread("background.jpg", CV_LOAD_IMAGE_GRAYSCALE);
-	}
-	else
-	{
-		cout << "Capturing new background" << endl;
-		background = NowFrame.clone();
-		cv::imwrite("background.jpg", background);
-	}
-	cv::resize(background, background, NowFrame.size());
-#endif
 	
 	cv::Mat bg_mask;
 	cv::Ptr<cv::BackgroundSubtractor> p_mog2 = cv::createBackgroundSubtractorMOG2();	
@@ -790,12 +570,6 @@ int _tmain(int argc, _TCHAR* argv[])
 			Sleep(1000 * 60);
 			continue;
 		}
-#endif
-#ifdef COLOR
-		//NowFrame = multicam.getImage();
-		cv::cvtColor(NowFrame, NowFrame, CV_RGB2BGR);
-#else
-		NowFrame = cv::Mat(rows, cols, CV_8UC1, rawImage.GetData()).clone();
 #endif
 
 		cv::Mat roiFrame = NowFrame.clone();
