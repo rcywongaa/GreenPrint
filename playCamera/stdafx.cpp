@@ -50,24 +50,6 @@ int getCurrentHour()
     return hour;
 }
 
-void PrintError( Error error )
-{
-    error.PrintErrorTrace();
-}
-
-int CheckError( Error error )
-{
-	if (error != PGRERROR_OK)
-    {
-		//Ignore image consistency error for now...
-        PrintError( error );
-		//system("pause");
-        //exit(-1);
-		return -1;
-    }
-	return 0;
-}
-
 void show(string window, cv::Mat img)
 {
 	cv::Mat resized;

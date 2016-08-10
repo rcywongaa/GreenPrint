@@ -56,9 +56,7 @@ int _tmain(int argc, _TCHAR* argv[])
 	const int MIN_UNCHANGED = 15;
 	const float DIFF_THRESH = 3.0;
 	vector<cv::Mat> stableFrames(MIN_UNCHANGED);
-	cv::Mat prev_rect_mask;
 	cv::Mat prevFrame;
-	vector<ColorRect> prev_rects;
 
     RectFinder chair_finder(CHAIR_COLORS, cv::Scalar(255, 0, 0));
     RectFinder table_finder(TABLE_COLORS, cv::Scalar(0, 0, 255));
@@ -90,9 +88,7 @@ int _tmain(int argc, _TCHAR* argv[])
 
 	while (true)
     {
-		time_t curr_time = time(NULL);
-		tm* curr_time_tm = localtime(&curr_time);
-		int hour = curr_time_tm->tm_hour;
+		int hour = getCurrentHour();
 		cout << hour << endl;
 #ifdef TIMER
 		if (hour < 18 || hour >= 22)
@@ -117,6 +113,7 @@ int _tmain(int argc, _TCHAR* argv[])
 
 		cv::Mat grayFrame;
 		cv::cvtColor(combinedFrame, grayFrame, CV_BGR2GRAY);
+        //TODO: Check if this is necessary
 		if (cv::countNonZero(grayFrame) > 0)
 		{
 			if (!lastFrame.empty())
@@ -189,7 +186,6 @@ int _tmain(int argc, _TCHAR* argv[])
 		}
 
 		lastFrame = combinedFrame.clone();
-		cv::cvtColor(lastFrame.clone(), prev_rect_mask, CV_BGR2GRAY, 1);
  		prevFrame = NowFrame.clone();
 
         if(cv::waitKey(100) == 27) break;

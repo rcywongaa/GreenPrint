@@ -89,7 +89,7 @@ cv::Mat RectFinder::findColor(cv::Mat input, Room room)
     int hour = getCurrentHour();
     if (hour > 18 && hour < 19)
     {
-        cv::inRange(hsv, get<0>(m_color_ranges[SIX]), get<1>(m_color_ranges[SIX]), mask);
+        cv::inRange(hsv, get<0>(m_color_ranges[ON]), get<1>(m_color_ranges[ON]), mask);
     }
     else
     {

@@ -54,8 +54,8 @@ cv::Scalar STUDY_TABLE_COLOR2(255, 255, 50);
 cv::Scalar STUDY_CHAIR_COLOR1(0, 0, 25);
 cv::Scalar STUDY_CHAIR_COLOR2(30, 75, 100);
 
-vector<tuple<cv::Scalar, cv::Scalar>> CHAIR_COLORS(5);
-vector<tuple<cv::Scalar, cv::Scalar>> TABLE_COLORS(5);
+vector<tuple<cv::Scalar, cv::Scalar>> CHAIR_COLORS(NUM_ROOMS);
+vector<tuple<cv::Scalar, cv::Scalar>> TABLE_COLORS(NUM_ROOMS);
 CHAIR_COLORS[LIVING] = tuple<cv::Scalar, cv::Scalar>(LIVING_CHAIR_COLOR1, LIVING_CHAIR_COLOR2);
 TABLE_COLORS[LIVING] = tuple<cv::Scalar, cv::Scalar>(LIVING_TABLE_COLOR1, LIVING_TABLE_COLOR2);
 CHAIR_COLORS[UNDEFINED] = tuple<cv::Scalar, cv::Scalar>(LIVING_CHAIR_COLOR1, LIVING_CHAIR_COLOR2);
@@ -64,5 +64,7 @@ CHAIR_COLORS[DINING] = tuple<cv::Scalar, cv::Scalar>(DINING_CHAIR_COLOR1, DINING
 TABLE_COLORS[DINING] = tuple<cv::Scalar, cv::Scalar>(DINING_TABLE_COLOR1, DINING_TABLE_COLOR2);
 CHAIR_COLORS[STUDY] = tuple<cv::Scalar, cv::Scalar>(STUDY_CHAIR_COLOR1, STUDY_CHAIR_COLOR2);
 TABLE_COLORS[STUDY] = tuple<cv::Scalar, cv::Scalar>(STUDY_TABLE_COLOR1, STUDY_TABLE_COLOR2);
-CHAIR_COLORS[SIX] = tuple<cv::Scalar, cv::Scalar>(CHAIR_COLOR1_1800, CHAIR_COLOR2_1800);
-TABLE_COLORS[SIX] = tuple<cv::Scalar, cv::Scalar>(TABLE_COLOR1_1800, TABLE_COLOR2_1800);
+CHAIR_COLORS[ON] = tuple<cv::Scalar, cv::Scalar>(CHAIR_COLOR1_1800, CHAIR_COLOR2_1800);
+TABLE_COLORS[ON] = tuple<cv::Scalar, cv::Scalar>(TABLE_COLOR1_1800, TABLE_COLOR2_1800);
+CHAIR_COLORS[OFF] = tuple<cv::Scalar, cv::Scalar>(CHAIR_COLOR1_1800, CHAIR_COLOR2_1800);
+TABLE_COLORS[OFF] = tuple<cv::Scalar, cv::Scalar>(TABLE_COLOR1_1800, TABLE_COLOR2_1800);
