@@ -42,6 +42,14 @@ string getCurrentTime()
 	return time_str;
 }
 
+int getCurrentHour()
+{
+    time_t curr_time = time(NULL);
+    tm* curr_time_tm = localtime(&curr_time);
+    int hour = curr_time_tm->tm_hour;
+    return hour;
+}
+
 void PrintError( Error error )
 {
     error.PrintErrorTrace();

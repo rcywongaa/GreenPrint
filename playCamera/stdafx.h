@@ -76,6 +76,7 @@ struct ColorRect {
 string getString(Room room);
 vector<cv::Point2f> getROIPts2f();
 string getCurrentTime();
+int getCurrentHour();
 int CheckError(Error error);
 void PrintError(Error error);
 cv::Mat getROIMask();
