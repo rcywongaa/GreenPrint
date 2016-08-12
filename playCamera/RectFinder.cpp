@@ -2,8 +2,13 @@
 
 #define DEBUG
 #define MIN_DIM 100
+#define MAX_DIM 400
 #define FILL_THRESH 0.8
 #define LOW_FILL_THRESH 0.2
+#define MAX_MOVE 100
+#define NUM_SAMPELS 500
+
+//TODO: Check Mat type consistency
 
 RectFinder::RectFinder(vector<tuple<cv::Scalar, cv::Scalar>> color_ranges, cv::Scalar rect_color)
 {
@@ -27,6 +32,21 @@ void RectFinder::process(cv::Mat input, Room room)
 {
     m_size = input.size();
     cv::Mat mask = findColor(input, room);
+
+    cv::Mat erodil_mask = mask.clone();
+	cv::erode(erodil_mask, erodil_mask, cv::Mat(), cv::Point(-1, -1), 10);
+	cv::dilate(erodil_mask, erodil_mask, cv::Mat(), cv::Point(-1, -1), 10);
+
+    cv::Mat dilero_mask = mask.clone();
+	cv::dilate(dilero_mask, dilero_mask , cv::Mat(), cv::Point(-1, -1), 10);
+	cv::erode(dilero_mask , dilero_mask , cv::Mat(), cv::Point(-1, -1), 10);
+    
+#ifdef DEBUG
+    show("morphed_mask", mask);
+#endif
+
+	cv::bitwise_and(mask, getROIMask(), mask);
+
     vector<cv::RotatedRect> curr_rects = findRects(mask);
     vector<cv::RotatedRect> true_rects = curr_rects;
 
@@ -44,6 +64,18 @@ void RectFinder::process(cv::Mat input, Room room)
             }
             //if (cv::norm(prev_rect->rect.center - now_rect->rect.center) < MAX_MOVE)
         }
+        auto min_dist_rect = min_element(curr_rects.begin(), curr_rects.end(), 
+                [prev_rect](auto v1, auto v2)
+                {
+                    return (cv::norm(prev_rect->center - v1->center) < cv::norm(prev_rect->center - v2->center));
+                }
+        );
+        if (cv::norm(prev_rect->center - min_dist_rect->center) < MAX_MOVE)
+        {
+            isMatched = true;
+        }
+        //Rects near edge?
+
         if (isMatched == false && getFillRate(mask, *prev_rect) > LOW_FILL_THRESH)
         {
             true_rects.push_back(*prev_rect);
@@ -64,11 +96,7 @@ cv::Mat RectFinder::drawColorRects(cv::Mat original)
 	for (auto rect : m_prev_rects)
 	{
 		cv::Mat this_rect_frame(m_size, CV_8UC3);
-		cv::Point2f pts2f[4];
-		rect.rect.points(pts2f);
-		cv::Point pts[4];
-		for (int i = 0; i < 4; i++) pts[i] = pts2f[i];
-		cv::fillConvexPoly(this_rect_frame, &pts[0], 4, rect.color);
+        this_rect_frame = drawRotatedRect(this_rect_frame, rect, m_color);
 		cv::max(this_rect_frame, output, output);
 	}
 	return output;
@@ -76,6 +104,7 @@ cv::Mat RectFinder::drawColorRects(cv::Mat original)
 
 cv::Mat RectFinder::findColor(cv::Mat input, Room room)
 {
+    assert(input.type == CV_8UC3);
 	cv::Mat hsv;
 	cv::Mat hsv_array[3];
 	cv::Mat mask;
@@ -104,29 +133,18 @@ cv::Mat RectFinder::findColor(cv::Mat input, Room room)
 
 vector<cv::RotatedRect> RectFinder::findRects(cv::Mat mask)
 {
+    assert(input.type == CV_8UC1);
     vector<cv::RotatedRect> rects;
 	vector<vector<cv::Point>> contours;
 	cv::findContours(mask, contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
-	cv::Mat contourFrame = cv::Mat::zeros(mask.size(), mask.type());
+	cv::Mat contourFrame = cv::Mat::zeros(mask.size(), CV_8UC3);
 	cv::drawContours(contourFrame, contours, -1, cv::Scalar(255, 255, 255));
-	cv::Mat rectFrame = cv::Mat::zeros(mask.size(), mask.type());
-	cv::Mat polyFrame = cv::Mat::zeros(mask.size(), mask.type());
+	cv::Mat rectFrame = cv::Mat::zeros(mask.size(), CV_8UC3);
+	cv::Mat polyFrame = cv::Mat::zeros(mask.size(), CV_8UC3);
 	for (auto contour : contours)
 	{
 		vector<cv::Point> polygon;
 		cv::approxPolyDP(contour, polygon, 0.05 * cv::arcLength(cv::Mat(contour), true), true);
-		double maxCos = 0.0;
-		vector<float> cos;
-		float medianCos = 0.0;
-		for (int i = 0; i < polygon.size(); i++)
-		{
-			int size = polygon.size();
-			cos.push_back(cosAngle(polygon[i], polygon[(i+2) % size], polygon[(i+1) % size]));
-			//maxCos = std::max(maxCos, abs(cosAngle(polygon[i], polygon[(i+2) % size], polygon[(i+1) % size])));
-		}
-		int median_idx = cos.size() / 2;
-		std::nth_element(cos.begin(), cos.begin() + median_idx, cos.end());
-		medianCos = cos[median_idx];
 		int npt[] = {polygon.size()}; //Because fillPoly assumes an array polygons...
 		const cv::Point* ppt[1] = {&polygon[0]};
 		cv::fillPoly(polyFrame, ppt, npt, 1, cv::Scalar(255, 255, 255));
@@ -134,39 +152,90 @@ vector<cv::RotatedRect> RectFinder::findRects(cv::Mat mask)
 		cv::RotatedRect rect;
 		rect = cv::minAreaRect(polygon);
 
-		if (rect.size.height > MIN_DIM && rect.size.height < 400 && rect.size.width > MIN_DIM && rect.size.width < 400)
-		{
-			//Consider using average cosAngles
-			if (polygon.size() >= 4 && polygon.size() <= 6)
-			{
-				//if (cv::contourArea(polygon) / rect.size.area() > 0.9)
-				//if (cv::pointPolygonTest(getROIPts2f(), rect.center, false) > 0)
-                if (getFillRate(getRotatedROI(mask, rect)) > FILL_THRESH)
-				{
-                    rects.push_back(rect);
-                    //TODO: Delete after testing
-					cv::Point2f pts2f[4];
-					rect.points(pts2f);
-					cv::Point pts[4];
-					for (int i = 0; i < 4; i++) pts[i] = pts2f[i];
-					cv::fillConvexPoly(rectFrame, &pts[0], 4, cv::Scalar(255, 255, 255));
 
-				}
-			}
-		}
+        //Consider using average cosAngles
+        //if (cv::contourArea(polygon) / rect.size.area() > 0.9)
+		if 
+        (
+            (rect.size.height > MIN_DIM && rect.size.height < 400 && rect.size.width > MIN_DIM && rect.size.width < 400)
+            && (polygon.size() >= 4 && polygon.size() <= 6)
+            && (getFillRate(getRotatedROI(mask, rect)) > FILL_THRESH)
+        )
+        {
+            rects.push_back(rect);
+            //TODO: Delete after testing
+            rectFrame = drawRotatedRect(rectFrame, rect, cv::Scalar(255, 255, 255));
+        }
 	}
 #ifdef DEBUG
 	show("polygon", polyFrame);
 	show("rect", rectFrame);
 #endif
-	getROIMask();
-    //TODO
 	return rects;
 }
 
-
-
 /******************** HELPER FUNCTIONS ********************/
+
+cv::RotatedRect RectFinder::findBestFitRect(cv::Mat mask)
+{
+    //http://www.visiondummy.com/2014/04/draw-error-ellipse-representing-covariance-matrix/
+    //Optional: + random sampling within bounding rect
+#ifdef DEBUG
+    show("findBestFitRect input", mask);
+#endif
+    cv::Mat points = ransam(mask, NUM_SAMPLES);
+    cv::Mat covar;
+    cv::Point2f mean;
+    cv::calcCovarMatrix(points, covar, mean, CV_COVAR_ROWS);
+    cv::RotatedRect best_fit_rect = getErrorEllipse(mean, covar);
+#ifdef DEBUG
+    show("bestfitrect", drawRotatedRect(mask, best_fit_rect, cv::Scalar(255)));
+#endif
+    return best_fit_rect;
+}
+
+cv::Mat ransam(cv::Mat mask, int size)
+{
+    vector<cv::Point> points;
+    while (points.size() < size)
+    {
+        int col = rand() % mask.cols;
+        int row = rand() % mask.rows;
+        if (mask.at(row, col) > 0)
+        {
+            points.push_back(cv::Point(row, col));
+        }
+    }
+    return cv::Mat(points);
+}
+
+//http://www.visiondummy.com/2014/04/draw-error-ellipse-representing-covariance-matrix/
+cv::RotatedRect getErrorEllipse(cv::Point2f mean, cv::Mat covmat)
+{
+    //Get the eigenvalues and eigenvectors
+    cv::Mat eigenvalues, eigenvectors;
+    cv::eigen(covmat, true, eigenvalues, eigenvectors);
+
+    //Calculate the angle between the largest eigenvector and the x-axis
+    double angle = atan2(eigenvectors.at<double>(0,1), eigenvectors.at<double>(0,0));
+
+    //Shift the angle to the [0, 2pi] interval instead of [-pi, pi]
+    if(angle < 0)
+        angle += 6.28318530718;
+
+    //Conver to degrees instead of radians
+    angle = 180*angle/3.14159265359;
+
+    //Calculate the size of the minor and major axes
+    //double halfmajoraxissize=chisquare_val*sqrt(eigenvalues.at<double>(0));
+    //double halfminoraxissize=chisquare_val*sqrt(eigenvalues.at<double>(1));
+    double halfmajoraxissize=2*sqrt(eigenvalues.at<double>(0));
+    double halfminoraxissize=2*sqrt(eigenvalues.at<double>(1));
+
+    //Return the oriented ellipse
+    //The -angle is used because OpenCV defines the angle clockwise instead of anti-clockwise
+    return cv::RotatedRect(mean, cv::Size2f(halfmajoraxissize, halfminoraxissize), -angle);
+}
 
 double cosAngle(cv::Point pt1, cv::Point pt2, cv::Point pt0 )
 {
@@ -198,6 +267,17 @@ float getFillRate(cv::Mat input)
 {
     assert(input.type() == CV_8UC1);
     return cv::sum(input) / (255 * input.rows * input.cols);
+}
+
+cv::Mat drawRotatedRect(cv::Mat input, cv::RotatedRect rect, cv::Scalar color)
+{
+    cv::Mat ret = input.clone();
+    cv::Point2f pts2f[4];
+    rect.points(pts2f);
+    cv::Point pts[4];
+    for (int i = 0; i < 4; i++) pts[i] = pts2f[i];
+    cv::fillConvexPoly(ret, &pts[0], 4, color);
+    return ret;
 }
 
 vector<ColorRect> findColorRects(cv::Mat input, tuple<cv::Scalar, cv::Scalar> colors, cv::Scalar rect_color)
@@ -249,16 +329,12 @@ vector<ColorRect> findColorRects(cv::Mat input, cv::Scalar color1, cv::Scalar co
 		cv::approxPolyDP(contour, polygon, 0.05 * cv::arcLength(cv::Mat(contour), true), true);
 		double maxCos = 0.0;
 		vector<float> cos;
-		float medianCos = 0.0;
 		for (int i = 0; i < polygon.size(); i++)
 		{
 			int size = polygon.size();
 			cos.push_back(cosAngle(polygon[i], polygon[(i+2) % size], polygon[(i+1) % size]));
 			//maxCos = std::max(maxCos, abs(cosAngle(polygon[i], polygon[(i+2) % size], polygon[(i+1) % size])));
 		}
-		int median_idx = cos.size() / 2;
-		std::nth_element(cos.begin(), cos.begin() + median_idx, cos.end());
-		medianCos = cos[median_idx];
 		int npt[] = {polygon.size()}; //Because fillPoly assumes an array polygons...
 		const cv::Point* ppt[1] = {&polygon[0]};
 		cv::fillPoly(polyFrame, ppt, npt, 1, cv::Scalar(255, 255, 255));
@@ -292,8 +368,6 @@ vector<ColorRect> findColorRects(cv::Mat input, cv::Scalar color1, cv::Scalar co
 	show("polygon", polyFrame);
 	show("rect", rectFrame);
 #endif
-	getROIMask();
-    //TODO
 	return color_rects;
 }
 

@@ -25,8 +25,10 @@ public class RectFinder
         vector<cv::RotatedRect> findRects(cv::Mat input);
 };
 
+cv::RotatedRect getErrorEllipse(cv::Point2f mean, cv::Mat covmat);
 double cosAngle(cv::Point pt1, cv::Point pt2, cv::Point pt0);
 cv::Mat getRotatedRectROI(cv::Mat input, cv::RotatedRect rect);
 float getFillRate(cv::Mat input);
+cv::Mat drawRotatedRect(cv::Mat input, cv::RotatedRect rect, cv::Scalar color);
 vector<ColorRect> findColorRects(cv::Mat input, tuple<cv::Scalar, cv::Scalar> colors, cv::Scalar rect_color);
 vector<ColorRect> findColorRects(cv::Mat input, cv::Scalar color1, cv::Scalar color2, cv::Scalar rect_color);
