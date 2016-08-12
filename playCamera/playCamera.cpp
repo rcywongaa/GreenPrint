@@ -4,7 +4,6 @@
 /*
 TODO:
 Distinguish table and chair based on size
-Use adaptiveThreshold
 */
 
 #define SAVE

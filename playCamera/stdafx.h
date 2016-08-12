@@ -32,6 +32,7 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <algorithm>
 
 using namespace std;
 
