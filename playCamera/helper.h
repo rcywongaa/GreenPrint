@@ -8,6 +8,7 @@ vector<RoomPhotos> prepareData();
 double calcScore(cv::Mat img, cv::Mat train);
 Room getSimilarRoom(cv::Mat &img, vector<RoomPhotos> &vecRP);
 double calculateDifference(cv::Mat &img1, cv::Mat &img2);
+void initializeColors();
 
 /********** CONSTANTS **********/
 extern vector<tuple<cv::Scalar, cv::Scalar>> CHAIR_COLORS;

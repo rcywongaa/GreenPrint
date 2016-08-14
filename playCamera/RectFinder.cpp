@@ -1,31 +1,34 @@
 #include "RectFinder.h"
 
 #define DEBUG
+
 #define MIN_DIM 100
 #define MAX_DIM 400
 #define FILL_THRESH 0.8
 #define LOW_FILL_THRESH 0.2
 #define MAX_MOVE 100
-#define NUM_SAMPELS 500
+#define NUM_SAMPLES 500
 
 //TODO: Check Mat type consistency
 
 RectFinder::RectFinder(vector<tuple<cv::Scalar, cv::Scalar>> color_ranges, cv::Scalar rect_color)
 {
     //TODO: Add assert
+	m_color_ranges = vector<tuple<cv::Scalar, cv::Scalar>>(NUM_ROOMS);
     m_color_ranges = color_ranges;
     m_color = rect_color;
 }
 
 RectFinder::RectFinder(cv::Scalar color1, cv::Scalar color2)
 {
-    vector<tuple<cv::Scalar, cv::Scalar>> param;
-    param.push_back(tuple<cv::Scalar, cv::Scalar>(color1, color2));
+	m_color_ranges = vector<tuple<cv::Scalar, cv::Scalar>>(NUM_ROOMS);
+    tuple<cv::Scalar, cv::Scalar> param(color1, color2);
+	m_color_ranges[ON] = param;
 }
 
 void RectFinder::process(cv::Mat input)
 {
-    process(input, 0);
+    process(input, ON);
 }
 
 void RectFinder::process(cv::Mat input, Room room)
@@ -40,12 +43,14 @@ void RectFinder::process(cv::Mat input, Room room)
     cv::Mat dilero_mask = mask.clone();
 	cv::dilate(dilero_mask, dilero_mask , cv::Mat(), cv::Point(-1, -1), 10);
 	cv::erode(dilero_mask , dilero_mask , cv::Mat(), cv::Point(-1, -1), 10);
+
+	mask = erodil_mask;
     
 #ifdef DEBUG
     show("morphed_mask", mask);
 #endif
 
-	cv::bitwise_and(mask, getROIMask(), mask);
+	//cv::bitwise_and(mask, getROIMask(), mask);
 
     vector<cv::RotatedRect> curr_rects = findRects(mask);
     vector<cv::RotatedRect> true_rects = curr_rects;
@@ -65,9 +70,9 @@ void RectFinder::process(cv::Mat input, Room room)
             //if (cv::norm(prev_rect->rect.center - now_rect->rect.center) < MAX_MOVE)
         }
         auto min_dist_rect = min_element(curr_rects.begin(), curr_rects.end(), 
-                [prev_rect](auto v1, auto v2)
+                [=](cv::RotatedRect v1, cv::RotatedRect v2)
                 {
-                    return (cv::norm(prev_rect->center - v1->center) < cv::norm(prev_rect->center - v2->center));
+                    return (cv::norm(prev_rect->center - v1.center) < cv::norm(prev_rect->center - v2.center));
                 }
         );
         if (cv::norm(prev_rect->center - min_dist_rect->center) < MAX_MOVE)
@@ -76,7 +81,7 @@ void RectFinder::process(cv::Mat input, Room room)
         }
         //Rects near edge?
 
-        if (isMatched == false && getFillRate(mask, *prev_rect) > LOW_FILL_THRESH)
+        if (isMatched == false && getFillRate(getRotatedRectROI(mask, *prev_rect)) > LOW_FILL_THRESH)
         {
             true_rects.push_back(*prev_rect);
         }
@@ -105,6 +110,11 @@ cv::Mat RectFinder::drawColorRects(cv::Mat original)
 cv::Mat RectFinder::findColor(cv::Mat input, Room room)
 {
     assert(input.type == CV_8UC3);
+	show("input", input);
+	cv::medianBlur(input, input, 31);
+#ifdef DEBUG
+	show("filtered", input);
+#endif
 	cv::Mat hsv;
 	cv::Mat hsv_array[3];
 	cv::Mat mask;
@@ -113,7 +123,7 @@ cv::Mat RectFinder::findColor(cv::Mat input, Room room)
 #ifdef DEBUG
 	show("h", hsv_array[0]);
 	show("s", hsv_array[1]);
-	how("v", hsv_array[2]);
+	show("v", hsv_array[2]);
 #endif
     int hour = getCurrentHour();
     if (hour > 18 && hour < 19)
@@ -159,7 +169,7 @@ vector<cv::RotatedRect> RectFinder::findRects(cv::Mat mask)
         (
             (rect.size.height > MIN_DIM && rect.size.height < 400 && rect.size.width > MIN_DIM && rect.size.width < 400)
             && (polygon.size() >= 4 && polygon.size() <= 6)
-            && (getFillRate(getRotatedROI(mask, rect)) > FILL_THRESH)
+            && (getFillRate(getRotatedRectROI(mask, rect)) > FILL_THRESH)
         )
         {
             rects.push_back(rect);
@@ -176,7 +186,7 @@ vector<cv::RotatedRect> RectFinder::findRects(cv::Mat mask)
 
 /******************** HELPER FUNCTIONS ********************/
 
-cv::RotatedRect RectFinder::findBestFitRect(cv::Mat mask)
+cv::RotatedRect findBestFitRect(cv::Mat mask)
 {
     //http://www.visiondummy.com/2014/04/draw-error-ellipse-representing-covariance-matrix/
     //Optional: + random sampling within bounding rect
@@ -185,9 +195,9 @@ cv::RotatedRect RectFinder::findBestFitRect(cv::Mat mask)
 #endif
     cv::Mat points = ransam(mask, NUM_SAMPLES);
     cv::Mat covar;
-    cv::Point2f mean;
-    cv::calcCovarMatrix(points, covar, mean, CV_COVAR_ROWS);
-    cv::RotatedRect best_fit_rect = getErrorEllipse(mean, covar);
+    cv::Mat mean;
+    cv::calcCovarMatrix(points, covar, mean, CV_COVAR_ROWS, CV_32S);
+    cv::RotatedRect best_fit_rect = getErrorEllipse(cv::Point2f(mean.at<int>(0, 0), mean.at<int>(0, 1)), covar);
 #ifdef DEBUG
     show("bestfitrect", drawRotatedRect(mask, best_fit_rect, cv::Scalar(255)));
 #endif
@@ -201,7 +211,7 @@ cv::Mat ransam(cv::Mat mask, int size)
     {
         int col = rand() % mask.cols;
         int row = rand() % mask.rows;
-        if (mask.at(row, col) > 0)
+        if (mask.at<uchar>(row, col) > 0)
         {
             points.push_back(cv::Point(row, col));
         }
@@ -214,7 +224,7 @@ cv::RotatedRect getErrorEllipse(cv::Point2f mean, cv::Mat covmat)
 {
     //Get the eigenvalues and eigenvectors
     cv::Mat eigenvalues, eigenvectors;
-    cv::eigen(covmat, true, eigenvalues, eigenvectors);
+    cv::eigen(covmat, eigenvalues, eigenvectors);
 
     //Calculate the angle between the largest eigenvector and the x-axis
     double angle = atan2(eigenvectors.at<double>(0,1), eigenvectors.at<double>(0,0));
@@ -258,7 +268,7 @@ cv::Mat getRotatedRectROI(cv::Mat input, cv::RotatedRect rect)
     }
     cv::Mat rot_mat = cv::getRotationMatrix2D(rect.center, angle, 1.0);
     cv::Mat rotated_input;
-    cv::warpAffine(input, rotated_input, rot_mat, input.size(), INTER_CUBIC);
+    cv::warpAffine(input, rotated_input, rot_mat, input.size(), CV_INTER_CUBIC);
     cv::getRectSubPix(rotated_input, rect_size, rect.center, output);
     return output;
 }
@@ -266,7 +276,7 @@ cv::Mat getRotatedRectROI(cv::Mat input, cv::RotatedRect rect)
 float getFillRate(cv::Mat input)
 {
     assert(input.type() == CV_8UC1);
-    return cv::sum(input) / (255 * input.rows * input.cols);
+    return cv::sum(input)[0] / (255 * input.rows * input.cols);
 }
 
 cv::Mat drawRotatedRect(cv::Mat input, cv::RotatedRect rect, cv::Scalar color)
@@ -303,7 +313,7 @@ vector<ColorRect> findColorRects(cv::Mat input, cv::Scalar color1, cv::Scalar co
 #ifdef DEBUG
 	show("h", hsv_array[0]);
 	show("s", hsv_array[1]);
-	how("v", hsv_array[2]);
+	show("v", hsv_array[2]);
 #endif
 	cv::inRange(hsv, color1, color2, mask);
 	cv::bitwise_and(mask, getROIMask(), mask);

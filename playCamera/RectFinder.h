@@ -5,12 +5,11 @@ struct ColorRect {
 	cv::Scalar color;
 };
 
-public class RectFinder
+class RectFinder
 {
     public:
         RectFinder(vector<tuple<cv::Scalar, cv::Scalar>> color_ranges, cv::Scalar rect_color);
         RectFinder(cv::Scalar color1, cv::Scalar color2);
-        ~RectFinder();
         void process(cv::Mat input);
         void process(cv::Mat input, Room room);
         cv::Mat drawColorRects(cv::Mat original);
@@ -25,6 +24,8 @@ public class RectFinder
         vector<cv::RotatedRect> findRects(cv::Mat input);
 };
 
+cv::RotatedRect findBestFitRect(cv::Mat mask);
+cv::Mat ransam(cv::Mat mask, int size);
 cv::RotatedRect getErrorEllipse(cv::Point2f mean, cv::Mat covmat);
 double cosAngle(cv::Point pt1, cv::Point pt2, cv::Point pt0);
 cv::Mat getRotatedRectROI(cv::Mat input, cv::RotatedRect rect);

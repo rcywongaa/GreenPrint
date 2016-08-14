@@ -15,17 +15,17 @@ public:
 	void setShutter(bool isBright);
     void stop();
 private:
-	GigECamera* m_cam;
+	FlyCapture2::GigECamera *m_cam;
 	cv::Size m_image_size;
 	std::mutex readLock;
 	std::mutex modeLock;
 	bool m_isBright;
 };
 
-int CheckError(Error error);
-void PrintError(Error error);
+int CheckError(FlyCapture2::Error error);
+void PrintError(FlyCapture2::Error error);
 void PrintBuildInfo();
-void PrintCameraInfo( CameraInfo* pCamInfo );
-void PrintFormat7Capabilities( Format7Info fmt7Info );
-GigECamera setupCam();
+void PrintCameraInfo( FlyCapture2::CameraInfo* pCamInfo );
+void PrintFormat7Capabilities( FlyCapture2::Format7Info fmt7Info );
+FlyCapture2::GigECamera* setupCam();
 

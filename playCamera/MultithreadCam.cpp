@@ -6,8 +6,8 @@ MultithreadCam::MultithreadCam()
 {
     m_cam = setupCam();
     GigEImageSettings imageSettings;
-    CheckError(cam.GetGigEImageSettings(&imageSettings));
-    m_image_size(imageSettings.width, imageSettings.height);
+    CheckError(m_cam->GetGigEImageSettings(&imageSettings));
+    m_image_size = cv::Size(imageSettings.width, imageSettings.height);
     m_isBright = false;
     //setShutter(m_isBright);
 }
@@ -69,10 +69,10 @@ cv::Size MultithreadCam::getImageSize()
 void MultithreadCam::stop()
 {
     // Stop capturing images
-    CheckError(m_cam.StopCapture());
+    CheckError(m_cam->StopCapture());
 
     // Disconnect the camera
-    CheckError(m_cam.Disconnect());
+    CheckError(m_cam->Disconnect());
 }
 
 
@@ -132,7 +132,7 @@ void PrintFormat7Capabilities( Format7Info fmt7Info )
 
 }
 
-GigECamera setupCam()
+GigECamera* setupCam()
 {
     /********** Set up camera **********/
     PrintBuildInfo();
@@ -145,49 +145,48 @@ GigECamera setupCam()
     {
         cout << "Insufficient number of cameras... exiting" << endl;
         system("pause");
-        return -1;
     }
 
     PGRGuid guid;
     CheckError(busMgr.GetCameraFromIndex(0, &guid));
 
-    GigECamera cam;
+    GigECamera *cam = new GigECamera();
     // Connect to a camera
-    CheckError(cam.Connect(&guid));
+    CheckError(cam->Connect(&guid));
 
     // Get the camera information
     CameraInfo camInfo;
-    CheckError(cam.GetCameraInfo(&camInfo));
+    CheckError(cam->GetCameraInfo(&camInfo));
 
     PrintCameraInfo(&camInfo);
 
     GigEImageSettingsInfo imageInfo;
-    CheckError(cam.GetGigEImageSettingsInfo(&imageInfo));
+    CheckError(cam->GetGigEImageSettingsInfo(&imageInfo));
     if ((PIXEL_FORMAT_BGR & imageInfo.pixelFormatBitField) == 0)
     {
         cout << "Pixel format is not supported" << endl;
-        return -1;
+		system("pause");
     }
 
     Mode mode = MODE_0;
-    CheckError(cam.SetGigEImagingMode(mode));
+    CheckError(cam->SetGigEImagingMode(mode));
 
     unsigned int maxPacketSize;
-    CheckError(cam.DiscoverGigEPacketSize(&maxPacketSize));
+    CheckError(cam->DiscoverGigEPacketSize(&maxPacketSize));
     cout << "Max packet size = " << maxPacketSize << endl;
 
     GigEProperty packetSizeProp;
     packetSizeProp.propType = PACKET_SIZE;
     packetSizeProp.isReadable = true;
     packetSizeProp.value = maxPacketSize;
-    CheckError(cam.SetGigEProperty(&packetSizeProp));
+    CheckError(cam->SetGigEProperty(&packetSizeProp));
     cout << "Packet size = " << maxPacketSize << endl;
     int PACKET_DELAY_VAL = 0;
     GigEProperty packetDelayProp;
     packetDelayProp.propType = PACKET_DELAY;
     packetDelayProp.isReadable = true;
     packetDelayProp.value = PACKET_DELAY_VAL;
-    CheckError(cam.SetGigEProperty(&packetDelayProp));
+    CheckError(cam->SetGigEProperty(&packetDelayProp));
     cout << "Packet delay = " << PACKET_DELAY_VAL << endl;
 
     Property brightnessProp;
@@ -196,21 +195,17 @@ GigECamera setupCam()
     brightnessProp.autoManualMode = false;
     brightnessProp.onOff = true;
     brightnessProp.absControl = true;
-    CheckError(cam.SetProperty(&brightnessProp));
-    CheckError(cam.GetProperty(&brightnessProp));
+    CheckError(cam->SetProperty(&brightnessProp));
+    CheckError(cam->GetProperty(&brightnessProp));
     cout << "Brightness = " << brightnessProp.absValue << endl;
     Property exposureProp;
     exposureProp.type = AUTO_EXPOSURE;
-#ifdef COLOR
     exposureProp.absValue = 1.25;
-#else
-    exposureProp.absValue = 2.00; //EV (-7.5 - 2.5)
-#endif
     exposureProp.autoManualMode = false;
     exposureProp.onOff = true;
     exposureProp.absControl = true;
-    CheckError(cam.SetProperty(&exposureProp));
-    CheckError(cam.GetProperty(&exposureProp));
+    CheckError(cam->SetProperty(&exposureProp));
+    CheckError(cam->GetProperty(&exposureProp));
     cout << "Exposure = " << exposureProp.absValue << endl;
     Property sharpnessProp;
     sharpnessProp.type = SHARPNESS;
@@ -218,42 +213,38 @@ GigECamera setupCam()
     sharpnessProp.autoManualMode = false;
     sharpnessProp.onOff = true;
     sharpnessProp.absControl = false; //absControl not supported
-    CheckError(cam.SetProperty(&sharpnessProp));
-    CheckError(cam.GetProperty(&sharpnessProp));
+    CheckError(cam->SetProperty(&sharpnessProp));
+    CheckError(cam->GetProperty(&sharpnessProp));
     cout << "Sharpness = " << sharpnessProp.valueA << endl;
     Property gammaProp;
     gammaProp.type = GAMMA;
-#ifdef COLOR
     gammaProp.absValue = 0.5;
-#else
-    gammaProp.absValue = 0.5; //(0.5 - 4.0)
-#endif
     gammaProp.autoManualMode = false;
     gammaProp.onOff = true;
     gammaProp.absControl = true;
-    CheckError(cam.SetProperty(&gammaProp));
-    CheckError(cam.GetProperty(&gammaProp));
+    CheckError(cam->SetProperty(&gammaProp));
+    CheckError(cam->GetProperty(&gammaProp));
     cout << "gamma = " << gammaProp.absValue << endl;
 
     Property whitebalanceProp;
     whitebalanceProp.type = WHITE_BALANCE;
     whitebalanceProp.onOff = false;
     whitebalanceProp.autoManualMode = true;
-    CheckError(cam.SetProperty(&whitebalanceProp));
+    CheckError(cam->SetProperty(&whitebalanceProp));
 
     Property shutterProp;
     shutterProp.type = SHUTTER;
     shutterProp.autoManualMode = true;
     shutterProp.absControl = true;
     shutterProp.absValue = 0.5;
-    CheckError(cam.SetProperty(&shutterProp));
+    CheckError(cam->SetProperty(&shutterProp));
 
     Property gainProp;
     gainProp.type = GAIN;
     gainProp.autoManualMode = true;
     gainProp.absControl = true;
     gainProp.absValue = 0;
-    CheckError(cam.SetProperty(&gainProp));
+    CheckError(cam->SetProperty(&gainProp));
 
     const int WIDTH = min(floor(sqrt(maxPacketSize * 1000)), (double)min(imageInfo.maxWidth, imageInfo.maxHeight));
     const int HEIGHT = WIDTH;
@@ -262,25 +253,21 @@ GigECamera setupCam()
     imageSettings.height = (HEIGHT/2) * 2; //Must be of intervals of 2
     imageSettings.offsetX = ((imageInfo.maxWidth - WIDTH) / 2) / 4 * 4; //Must be of intervals of 4
     imageSettings.offsetY = ((imageInfo.maxHeight - HEIGHT) / 2) / 2 * 2; //Must be of intervals of 2
-#ifdef COLOR
     imageSettings.pixelFormat = PIXEL_FORMAT_RGB8;
-#else
-    imageSettings.pixelFormat = PIXEL_FORMAT_MONO8;
-#endif
     // Set the settings to the camera
-    CheckError(cam.SetGigEImageSettings(&imageSettings));
-    CheckError(cam.GetGigEImageSettings(&imageSettings));
+    CheckError(cam->SetGigEImageSettings(&imageSettings));
+    CheckError(cam->GetGigEImageSettings(&imageSettings));
     cv::Size imgSize(imageSettings.width, imageSettings.height);
     cout << "Image size = " << imgSize << endl;
     cout << "Image X-offset = " << imageSettings.offsetX << ", Y-offset = " << imageSettings.offsetY << endl;
     cout << "Pixel format = " << imageSettings.pixelFormat << endl;
 
     // Start capturing images
-    CheckError(cam.StartCapture());
+    CheckError(cam->StartCapture());
     // Retrieve frame rate property
     Property frameProp;
     frameProp.type = FRAME_RATE;
-    CheckError(cam.GetProperty( &frameProp ));
+    CheckError(cam->GetProperty( &frameProp ));
     cout << "Frame rate is " << fixed << setprecision(2) << frameProp.absValue << " fps" << endl;
     return cam;
 }

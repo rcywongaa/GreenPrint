@@ -20,7 +20,7 @@ Distinguish table and chair based on size
 
 int _tmain(int argc, _TCHAR* argv[])
 {
-	MultithreadCam multicam();
+	MultithreadCam multicam;
 #ifdef SAVE
 	VideoRecorder recorder(&multicam);
 #endif
@@ -56,6 +56,7 @@ int _tmain(int argc, _TCHAR* argv[])
 	vector<cv::Mat> stableFrames(MIN_UNCHANGED);
 	cv::Mat prevFrame;
 
+	initializeColors();
     RectFinder chair_finder(CHAIR_COLORS, cv::Scalar(255, 0, 0));
     RectFinder table_finder(TABLE_COLORS, cv::Scalar(0, 0, 255));
 
@@ -75,19 +76,18 @@ int _tmain(int argc, _TCHAR* argv[])
 	}
 #endif
 
-	/*
-	cv::Scalar COLORS1 = cv::Scalar(0, 40, 0);
-	cv::Scalar COLORS2 = cv::Scalar(30, 70, 50);
-	tuple<cv::Scalar, cv::Scalar> COLORS = tuple<cv::Scalar, cv::Scalar>(COLORS1, COLORS2);
+	///*
+	cv::Scalar COLOR1 = cv::Scalar(0, 40, 0);
+	cv::Scalar COLOR2 = cv::Scalar(30, 100, 50);
+	RectFinder test_finder(COLOR1, COLOR2);
 	while(true)
 	{
 		cv::Mat f = multicam.getImage();
-		cv::cvtColor(f, f, CV_RGB2BGR);
 		cv::Scalar mean = cv::mean(f,  getROIMask());
-		cv::Mat rectFrame = drawColorRects(findColor(f, COLORS, cv::Scalar(255, 255, 255)), f.size());
+		test_finder.process(f);
 		cv::waitKey(100);
 	}
-	*/
+	//*/
 
 	while (true)
     {
