@@ -61,6 +61,7 @@ int _tmain(int argc, _TCHAR* argv[])
 
 
 
+#ifdef MANUAL
 	/*********************************************/
 	//SUMMER EDIT HERE
 	Room current_room = OFF;//STUDY DINING LIVING
@@ -72,6 +73,7 @@ int _tmain(int argc, _TCHAR* argv[])
 		setLight(curl, current_room);
 		Sleep(2000);
 	}
+#endif
 
 	/*
 	cv::Scalar COLORS1 = cv::Scalar(0, 40, 0);
