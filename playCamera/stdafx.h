@@ -10,8 +10,6 @@
 #include <stdio.h>
 #include <tchar.h>
 
-
-
 // TODO: reference additional headers your program requires here
 
 #include <cstdio>
@@ -42,7 +40,10 @@ using namespace std;
 
 #include <tuple>
 
+#define HAVE_IMAGE_HASH 1
 #define cimg_plugin1 "cvMat.h"
+#include "pHash.h"
+#pragma comment(lib, "pHash.lib")
 
 enum Room {DINING, LIVING, STUDY, UNDEFINED, ON, OFF, NUM_ROOMS};
 
