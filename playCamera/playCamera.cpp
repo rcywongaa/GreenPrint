@@ -42,8 +42,7 @@ int _tmain(int argc, _TCHAR* argv[])
 	bool isProcessed = false;
 	int numUnchanged = 0;
 
-	Room lastLighting = UNDEFINED;
-	//setLight(curl, lastLighting);
+	Room lastLighting = OFF;
 
     // Retrieve an image
 	cv::Mat NowFrame;
@@ -75,12 +74,15 @@ int _tmain(int argc, _TCHAR* argv[])
 	}
 
 	/*
+	cv::Scalar COLORS1 = cv::Scalar(0, 40, 0);
+	cv::Scalar COLORS2 = cv::Scalar(30, 70, 50);
+	tuple<cv::Scalar, cv::Scalar> COLORS = tuple<cv::Scalar, cv::Scalar>(COLORS1, COLORS2);
 	while(true)
 	{
 		cv::Mat f = multicam.getImage();
 		cv::cvtColor(f, f, CV_RGB2BGR);
 		cv::Scalar mean = cv::mean(f,  getROIMask());
-		cv::Mat rectFrame = drawColorRects(findColor(f, TABLE_COLORS[DINING], cv::Scalar(255, 255, 255)), f.size());
+		cv::Mat rectFrame = drawColorRects(findColor(f, COLORS, cv::Scalar(255, 255, 255)), f.size());
 		cv::waitKey(100);
 	}
 	*/
@@ -96,8 +98,15 @@ int _tmain(int argc, _TCHAR* argv[])
 			if (hour >= 7 && hour < 18) setLight(curl, OFF);
 			else if (hour >= 22 || hour < 7) setLight(curl, ON);
 #endif
-			sound_controller.setRoom(UNDEFINED);
-			cout << "Not time yet!" << endl;
+			sound_controller.setRoom(OFF);
+			cout << "Disable detection!" << endl;
+			Sleep(1000 * 60); //wait 1 min
+			continue;
+		}
+		else
+		{
+			setLight(curl, ON);
+			cout << "Detecting!" << endl;
 			Sleep(1000 * 60);
 			continue;
 		}

@@ -114,7 +114,7 @@ void SoundController::playSoundCont()
 			duration = playSound(curr_room);
 		}
 
-		if (curr_room != m_room) // room changed
+		if (curr_room != m_room || m_room == OFF) // room changed
 		{
 			break;
 		}
