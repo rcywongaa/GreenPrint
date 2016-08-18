@@ -1,6 +1,7 @@
 #include "RectFinder.h"
 
 #define DEBUG
+#define WATERSHED
 
 #define MIN_DIM 100
 #define MAX_DIM 400
@@ -34,25 +35,23 @@ void RectFinder::process(cv::Mat input)
 void RectFinder::process(cv::Mat input, Room room)
 {
     m_size = input.size();
-    cv::Mat mask = findColor(input, room);
-
-    cv::Mat erodil_mask = mask.clone();
-	cv::erode(erodil_mask, erodil_mask, cv::Mat(), cv::Point(-1, -1), 10);
-	cv::dilate(erodil_mask, erodil_mask, cv::Mat(), cv::Point(-1, -1), 10);
-
-    cv::Mat dilero_mask = mask.clone();
-	cv::dilate(dilero_mask, dilero_mask , cv::Mat(), cv::Point(-1, -1), 10);
-	cv::erode(dilero_mask , dilero_mask , cv::Mat(), cv::Point(-1, -1), 10);
-
-	mask = erodil_mask;
-    
+	show("input", input);
+    cv::pyrMeanShiftFiltering(input, input, 50, 50);
+    //cv::bilateralFilter(input, input, 5, 150, 150);
 #ifdef DEBUG
-    show("morphed_mask", mask);
+	show("filtered", input);
 #endif
 
-	//cv::bitwise_and(mask, getROIMask(), mask);
+    cv::Mat mask = findColor(input, room);
+	cv::bitwise_and(mask, getROIMask(), mask);
 
-    vector<cv::RotatedRect> curr_rects = findRects(mask);
+    cv::Mat fg = findForeground(input, mask);
+
+#ifdef WATERSHED
+    vector<cv::RotatedRect> curr_rects = findGrayRects(fg);
+#elif GRABCUT
+    vector<cv::RotatedRect> curr_rects = findBinaryRects(fg);
+#endif
     vector<cv::RotatedRect> true_rects = curr_rects;
 
     for (auto prev_rect = m_prev_rects.begin(); prev_rect != m_prev_rects.end(); prev_rect++)
@@ -110,11 +109,6 @@ cv::Mat RectFinder::drawColorRects(cv::Mat original)
 cv::Mat RectFinder::findColor(cv::Mat input, Room room)
 {
     assert(input.type == CV_8UC3);
-	show("input", input);
-	cv::medianBlur(input, input, 31);
-#ifdef DEBUG
-	show("filtered", input);
-#endif
 	cv::Mat hsv;
 	cv::Mat hsv_array[3];
 	cv::Mat mask;
@@ -141,9 +135,66 @@ cv::Mat RectFinder::findColor(cv::Mat input, Room room)
     return mask;
 }
 
-vector<cv::RotatedRect> RectFinder::findRects(cv::Mat mask)
+cv::Mat RectFinder::findForeground(cv::Mat input, cv::Mat mask)
+{
+    int BG_MARKER = 100;
+    int FG_MARKER = 200;
+    int MIN_DIST = 100;
+    //distanceTransform
+    cv::Mat dist_mask;
+    cv::distanceTransform(mask, dist_mask, CV_DIST_L2, 3);
+    cv::Mat fg;
+    cv::threshold(dist_mask, fg, MIN_DIST, FG_MARKER, THRESH_BINARY);
+    show("fg", fg);
+    vector<vector<Point>> contours;
+    findContours(fg, contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
+    cv::Mat bg;
+    cv::dilate(mask, bg, cv::Mat(), cv::Point(-1, -1), 10);
+    cv::bitwise_not(bg, bg);
+    show("bg", bg);
+    bg = cv::min(bg, BG_MARKER);
+#ifdef WATERSHED
+    cv::Mat markers = bg;
+    for (int i = 0; i < contours.size(); i++)
+    {
+        drawContours(markers, contours, i, cv::Scalar::all(FG_MARKER + i), -1);
+    }
+    show("markers", markers);
+    cv::watershed(input, markers);
+    show("watershed", markers);
+#elif GRABCUT
+    cv::Mat bgdModel;
+    cv::Mat fgdModel;
+    cv::Mat markers = cv::max(fg, bg);
+    markers.setTo(cv::Scalar(255), markers == 0);
+    markers.setTo(GC_FGD, markers == FG_MARKER);
+    markers.setTo(GC_BGD, markers == BG_MARKER);
+    show("markers", markers);
+    cv::grabCut(input, markers, cv::Rect(), bgdModel, fgdModel, 5, cv::GC_INIT_WITH_MASK);
+    show("grabcut", markers);
+#endif
+
+    //bounding circle?
+    return markers;
+}
+
+vector<cv::RotatedRect> RectFinder::findGrayRects(cv::Mat mask)
+{
+    vector<cv::RotatedRect> ret;
+    vector<unsigned char> values = unique(mask, true);
+    for (auto value : values)
+    {
+        if (value == 0) continue;
+        vector<cv::RotatedRect> rects = findBinaryRects(mask == value);
+        ret.insert(ret.end(), rects.begin(), rects.end());
+    }
+    return ret;
+}
+
+vector<cv::RotatedRect> RectFinder::findBinaryRects(cv::Mat mask)
 {
     assert(input.type == CV_8UC1);
+    //TODO: Recognize rectangles of different gray level
     vector<cv::RotatedRect> rects;
 	vector<vector<cv::Point>> contours;
 	cv::findContours(mask, contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
@@ -185,6 +236,33 @@ vector<cv::RotatedRect> RectFinder::findRects(cv::Mat mask)
 }
 
 /******************** HELPER FUNCTIONS ********************/
+
+std::vector<unsigned char> unique(const cv::Mat& input, bool sort = false)
+{
+    if (input.channels() > 1 || input.type() != CV_UC1) 
+    {
+        std::cerr << "unique !!! Only works with CV_UC 1-channel Mat" << std::endl;
+        return std::vector<unsigned char>();
+    }
+
+    std::vector<unsigned char> out;
+    for (int y = 0; y < input.rows; ++y)
+    {
+        const unsigned char* row_ptr = input.ptr<unsigned char>(y);
+        for (int x = 0; x < input.cols; ++x)
+        {
+            unsigned char value = row_ptr[x];
+
+            if ( std::find(out.begin(), out.end(), value) == out.end() )
+                out.push_back(value);
+        }
+    }
+
+    if (sort)
+        std::sort(out.begin(), out.end());
+
+    return out;
+}
 
 cv::RotatedRect findBestFitRect(cv::Mat mask)
 {
@@ -381,4 +459,4 @@ vector<ColorRect> findColorRects(cv::Mat input, cv::Scalar color1, cv::Scalar co
 	return color_rects;
 }
 
-    
+   
