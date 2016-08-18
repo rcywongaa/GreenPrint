@@ -21,11 +21,12 @@ class RectFinder
         cv::Scalar m_color;
         cv::Size m_size;
         cv::Mat findColor(cv::Mat input, Room room);
+		cv::Mat findForeground(cv::Mat input, cv::Mat mask);
         vector<cv::RotatedRect> findGrayRects(cv::Mat mask);
         vector<cv::RotatedRect> findBinaryRects(cv::Mat mask);
 };
 
-std::vector<unsigned char> unique(const cv::Mat& input, bool sort = false);
+std::vector<unsigned char> find_unique(const cv::Mat& input, bool sort = false);
 cv::RotatedRect findBestFitRect(cv::Mat mask);
 cv::Mat ransam(cv::Mat mask, int size);
 cv::RotatedRect getErrorEllipse(cv::Point2f mean, cv::Mat covmat);

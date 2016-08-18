@@ -144,9 +144,9 @@ cv::Mat RectFinder::findForeground(cv::Mat input, cv::Mat mask)
     cv::Mat dist_mask;
     cv::distanceTransform(mask, dist_mask, CV_DIST_L2, 3);
     cv::Mat fg;
-    cv::threshold(dist_mask, fg, MIN_DIST, FG_MARKER, THRESH_BINARY);
+    cv::threshold(dist_mask, fg, MIN_DIST, FG_MARKER, CV_THRESH_BINARY);
     show("fg", fg);
-    vector<vector<Point>> contours;
+    vector<vector<cv::Point>> contours;
     findContours(fg, contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
     cv::Mat bg;
     cv::dilate(mask, bg, cv::Mat(), cv::Point(-1, -1), 10);
@@ -181,7 +181,7 @@ cv::Mat RectFinder::findForeground(cv::Mat input, cv::Mat mask)
 vector<cv::RotatedRect> RectFinder::findGrayRects(cv::Mat mask)
 {
     vector<cv::RotatedRect> ret;
-    vector<unsigned char> values = unique(mask, true);
+    vector<unsigned char> values = find_unique(mask, true);
     for (auto value : values)
     {
         if (value == 0) continue;
@@ -237,9 +237,9 @@ vector<cv::RotatedRect> RectFinder::findBinaryRects(cv::Mat mask)
 
 /******************** HELPER FUNCTIONS ********************/
 
-std::vector<unsigned char> unique(const cv::Mat& input, bool sort = false)
+std::vector<unsigned char> find_unique(const cv::Mat& input, bool sort)
 {
-    if (input.channels() > 1 || input.type() != CV_UC1) 
+    if (input.channels() > 1 || input.type() != CV_8UC1) 
     {
         std::cerr << "unique !!! Only works with CV_UC 1-channel Mat" << std::endl;
         return std::vector<unsigned char>();
