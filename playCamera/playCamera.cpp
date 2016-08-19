@@ -78,14 +78,15 @@ int _tmain(int argc, _TCHAR* argv[])
 
 	///*
 	cv::Scalar COLOR1 = cv::Scalar(0, 40, 0);
-	cv::Scalar COLOR2 = cv::Scalar(30, 100, 50);
+	cv::Scalar COLOR2 = cv::Scalar(30, 100, 100);
 	RectFinder test_finder(COLOR1, COLOR2);
 	while(true)
 	{
 		cv::Mat f = multicam.getImage();
 		cv::Scalar mean = cv::mean(f,  getROIMask());
-		test_finder.process(f);
-		cv::waitKey(100);
+		test_finder.process(f.clone());
+		show("rects", test_finder.drawColorRects());
+		cv::waitKey(1);
 	}
 	//*/
 

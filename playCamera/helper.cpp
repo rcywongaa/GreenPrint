@@ -27,8 +27,8 @@ void initializeColors()
 	cv::Scalar CHAIR_COLOR1(0, 30, 0);
 	cv::Scalar CHAIR_COLOR2(30, 120, 75);
 	*/												 
-	cv::Scalar TABLE_COLOR1_1800(0, 0, 0);
-	cv::Scalar TABLE_COLOR2_1800(40, 50, 60);
+	cv::Scalar TABLE_COLOR1_1800(0, 40, 0);
+	cv::Scalar TABLE_COLOR2_1800(40, 100, 100);
 	cv::Scalar CHAIR_COLOR1_1800(0, 40, 0);
 	cv::Scalar CHAIR_COLOR2_1800(40, 120, 75);
 
