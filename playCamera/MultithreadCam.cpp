@@ -25,10 +25,11 @@ cv::Mat MultithreadCam::getImage()
     cv::Mat NowFrame;
     CheckError(m_cam->RetrieveBuffer( &rawImage ));
     NowFrame = cv::Mat(m_image_size, CV_8UC3, rawImage.GetData());
+	//Sleep(10);
     //cout << "unlocking readLock" << endl;
     readLock.unlock();
     cv::cvtColor(NowFrame, NowFrame, CV_RGB2BGR);
-    return NowFrame;
+    return NowFrame.clone();
 }
 
 cv::Mat MultithreadCam::getImage(bool isBright)
@@ -200,7 +201,7 @@ GigECamera* setupCam()
     cout << "Brightness = " << brightnessProp.absValue << endl;
     Property exposureProp;
     exposureProp.type = AUTO_EXPOSURE;
-    exposureProp.absValue = 1.25;
+    exposureProp.absValue = 1.5;
     exposureProp.autoManualMode = false;
     exposureProp.onOff = true;
     exposureProp.absControl = true;

@@ -27,8 +27,8 @@ class RectFinder
 };
 
 std::vector<unsigned char> find_unique(const cv::Mat& input, bool sort = false);
-cv::RotatedRect findBestFitRect(cv::Mat mask);
-cv::Mat ransam(cv::Mat mask, int size);
+cv::RotatedRect findBestFitRect(cv::Mat mask, cv::Rect bounds);
+cv::Mat ransam(cv::Mat mask, int size, cv::Rect bounds);
 cv::RotatedRect getErrorEllipse(cv::Point2f mean, cv::Mat covmat);
 double cosAngle(cv::Point pt1, cv::Point pt2, cv::Point pt0);
 cv::Mat getRotatedRectROI(cv::Mat input, cv::RotatedRect rect);

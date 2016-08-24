@@ -2,13 +2,15 @@
 
 #define DEBUG
 #define WATERSHED
+//#define GRABCUT //Too slow
 
-#define MIN_DIM 100
+#define MIN_DIM 75
 #define MAX_DIM 400
 #define FILL_THRESH 0.8
-#define LOW_FILL_THRESH 0.2
-#define MAX_MOVE 100
+#define LOW_FILL_THRESH 0.3
+#define MAX_MOVE 200
 #define NUM_SAMPLES 500
+#define MIN_DIST 40
 
 //TODO: Check Mat type consistency
 
@@ -67,28 +69,30 @@ void RectFinder::process(cv::Mat input, Room room)
     for (auto prev_rect = m_prev_rects.begin(); prev_rect != m_prev_rects.end(); prev_rect++)
     {
         bool isMatched = false;
-        for (auto curr_rect = curr_rects.begin(); curr_rect != curr_rects.end(); curr_rect++)
-        {
-            vector<cv::Point2f> curr_rect_pts(4);
-            curr_rect->points(&curr_rect_pts[0]);
-            if (cv::pointPolygonTest(curr_rect_pts, prev_rect->center, false) > 0)
-            {
-                isMatched = true;
-                break;
-            }
-            //if (cv::norm(prev_rect->rect.center - now_rect->rect.center) < MAX_MOVE)
-        }
-        auto min_dist_rect = min_element(curr_rects.begin(), curr_rects.end(), 
-                [=](cv::RotatedRect v1, cv::RotatedRect v2)
-                {
-                    return (cv::norm(prev_rect->center - v1.center) < cv::norm(prev_rect->center - v2.center));
-                }
-        );
-        if (cv::norm(prev_rect->center - min_dist_rect->center) < MAX_MOVE)
-        {
-            isMatched = true;
-        }
-        //Rects near edge?
+		if (curr_rects.size() > 0)
+		{
+			for (auto curr_rect = curr_rects.begin(); curr_rect != curr_rects.end(); curr_rect++)
+			{
+				vector<cv::Point2f> curr_rect_pts(4);
+				curr_rect->points(&curr_rect_pts[0]);
+				if (cv::pointPolygonTest(curr_rect_pts, prev_rect->center, false) > 0)
+				{
+					isMatched = true;
+					break;
+				}
+			}
+			auto min_dist_rect = min_element(curr_rects.begin(), curr_rects.end(), 
+					[=](cv::RotatedRect v1, cv::RotatedRect v2)
+					{
+						return (cv::norm(prev_rect->center - v1.center) < cv::norm(prev_rect->center - v2.center));
+					}
+			);
+			if (cv::norm(prev_rect->center - min_dist_rect->center) < MAX_MOVE)
+			{
+				isMatched = true;
+			}
+			//Rects near edge?
+		}
 
         if (isMatched == false && getFillRate(getRotatedRectROI(mask, *prev_rect)) > LOW_FILL_THRESH)
         {
@@ -113,7 +117,6 @@ cv::Mat RectFinder::drawColorRects(cv::Mat original)
         this_rect_frame = drawRotatedRect(this_rect_frame, rect, m_color);
 		cv::max(this_rect_frame, output, output);
 	}
-	show("output", output);
 	return output;
 }
 
@@ -131,13 +134,28 @@ cv::Mat RectFinder::findColor(cv::Mat input, Room room)
 	show("v", hsv_array[2]);
 #endif
     int hour = getCurrentHour();
-    if (hour > 18 && hour < 19)
+    if (hour == 19)
     {
         cv::inRange(hsv, get<0>(m_color_ranges[ON]), get<1>(m_color_ranges[ON]), mask);
     }
     else
     {
-        cv::inRange(hsv, get<0>(m_color_ranges[room]), get<1>(m_color_ranges[room]), mask);
+		cv::Scalar color1 = get<0>(m_color_ranges[room]);
+		cv::Scalar color2 = get<1>(m_color_ranges[room]);
+		if (color1[0] > color2[0])
+		{
+			cv::Scalar upper(255, color2[1], color2[2]);
+			cv::Scalar lower(0, color1[1], color1[2]);
+			cv::Mat temp_mask_upper;
+			cv::Mat temp_mask_lower;
+			cv::inRange(hsv, color1, upper, temp_mask_upper);
+			cv::inRange(hsv, lower, color2, temp_mask_lower);
+			cv::bitwise_or(temp_mask_lower, temp_mask_upper, mask);
+		}
+		else
+		{
+			cv::inRange(hsv, get<0>(m_color_ranges[room]), get<1>(m_color_ranges[room]), mask);
+		}
     }
 	cv::bitwise_and(mask, getROIMask(), mask);
 #ifdef DEBUG
@@ -150,7 +168,6 @@ cv::Mat RectFinder::findForeground(cv::Mat input, cv::Mat mask)
 {
     int BG_MARKER = 100;
     int FG_MARKER = 200;
-    int MIN_DIST = 40;
 	//distanceTransform
     cv::Mat dist_mask;
     cv::distanceTransform(mask, dist_mask, CV_DIST_L2, CV_32F);
@@ -159,16 +176,14 @@ cv::Mat RectFinder::findForeground(cv::Mat input, cv::Mat mask)
 	show("dist", dist_mask_8u);
     cv::Mat fg;
     cv::threshold(dist_mask_8u, fg, MIN_DIST, FG_MARKER, CV_THRESH_BINARY);
-    show("fg", fg);
     vector<vector<cv::Point>> contours;
 	vector<cv::Vec4i> contour_hierarchy;
-	cv::findContours(fg, contours, contour_hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
+	cv::findContours(fg.clone(), contours, contour_hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
 
     //cv::findContours(fg, contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
     cv::Mat bg;
     cv::dilate(mask, bg, cv::Mat(), cv::Point(-1, -1), 10);
     cv::bitwise_not(bg, bg);
-    show("bg", bg);
     bg = cv::min(bg, BG_MARKER);
 #ifdef WATERSHED
     cv::Mat markers = bg;
@@ -176,23 +191,31 @@ cv::Mat RectFinder::findForeground(cv::Mat input, cv::Mat mask)
     {
         drawContours(markers, contours, i, cv::Scalar::all(FG_MARKER + i), -1);
     }
-    show("markers", markers);
+    //show("markers", markers);
 	markers.convertTo(markers, CV_32SC1);
     cv::watershed(input, markers);
 	markers.convertTo(markers, CV_8UC1);
-    show("watershed", markers);
+    //show("watershed", markers);
 #endif
 #ifdef GRABCUT
     cv::Mat bgdModel;
     cv::Mat fgdModel;
     cv::Mat markers = cv::max(fg, bg);
+    show("markers", markers);
     markers.setTo(cv::GC_PR_BGD, markers == 0);
     markers.setTo(cv::GC_FGD, markers == FG_MARKER);
     markers.setTo(cv::GC_BGD, markers == BG_MARKER);
-    show("markers", markers);
+	show("grabcut markers", markers);
 	cv::waitKey();
-    cv::grabCut(input, markers, cv::Rect(), bgdModel, fgdModel, 5, cv::GC_INIT_WITH_MASK);
-    show("grabcut", markers);
+	cout << "grabCut begin!" << endl;
+	cv::grabCut(input, markers, cv::Rect(), bgdModel, fgdModel, 5, cv::GC_INIT_WITH_MASK);
+    cout << "grabCut end!" << endl;
+	markers.setTo(FG_MARKER, markers == cv::GC_FGD);
+	markers.setTo(FG_MARKER, markers == cv::GC_PR_FGD);
+	markers.setTo(BG_MARKER, markers == cv::GC_BGD);
+	markers.setTo(BG_MARKER, markers == cv::GC_PR_BGD);
+	show("grabcut", markers);
+	cv::waitKey();
 #endif
 
     //bounding circle?
@@ -235,19 +258,15 @@ vector<cv::RotatedRect> RectFinder::findBinaryRects(cv::Mat mask)
 		cv::RotatedRect rect;
 		rect = cv::minAreaRect(polygon);
 		//TODO: Pass RotatedRect to findBestFitRect() to speed up sampling
-		cv::RotatedRect bestfit_rect = findBestFitRect(mask);
+		cv::RotatedRect bestfit_rect = findBestFitRect(mask, cv::boundingRect(cv::Mat(polygon)));
 
-		if (getFillRate(getRotatedRectROI(mask, bestfit_rect)) > FILL_THRESH)
+		if (bestfit_rect.size.width > MIN_DIM && bestfit_rect.size.height > MIN_DIM && getFillRate(getRotatedRectROI(mask, bestfit_rect)) > FILL_THRESH)
         {
             rects.push_back(bestfit_rect);
             //TODO: Delete after testing
             rectFrame = drawRotatedRect(rectFrame, rect, cv::Scalar(255, 255, 255));
         }
 	}
-#ifdef DEBUG
-	show("polygon", polyFrame);
-	show("rect", rectFrame);
-#endif
 	return rects;
 }
 
@@ -280,32 +299,29 @@ std::vector<unsigned char> find_unique(const cv::Mat& input, bool sort)
     return out;
 }
 
-cv::RotatedRect findBestFitRect(cv::Mat mask)
+cv::RotatedRect findBestFitRect(cv::Mat mask, cv::Rect rect)
 {
     //http://www.visiondummy.com/2014/04/draw-error-ellipse-representing-covariance-matrix/
     //Optional: + random sampling within bounding rect
-#ifdef DEBUG
-    show("findBestFitRect input", mask);
-#endif
-    cv::Mat points = ransam(mask, NUM_SAMPLES);
+    cv::Mat points = ransam(mask, NUM_SAMPLES, rect);
     cv::Mat covar;
     cv::Mat mean;
     cv::calcCovarMatrix(points, covar, mean, CV_COVAR_NORMAL | CV_COVAR_SCALE | CV_COVAR_ROWS, CV_32S);
     cv::RotatedRect best_fit_rect = getErrorEllipse(cv::Point2f(mean.at<float>(0, 0), mean.at<float>(0, 1)), covar);
 #ifdef DEBUG
-	cv::Mat bestfitrect(mask.size(), mask.type());
-    show("bestfitrect", drawRotatedRect(bestfitrect, best_fit_rect, cv::Scalar::all(255)));
+	//cv::Mat bestfitrect(mask.size(), mask.type());
+    //show("bestfitrect", drawRotatedRect(bestfitrect, best_fit_rect, cv::Scalar::all(255)));
 #endif
     return best_fit_rect;
 }
 
-cv::Mat ransam(cv::Mat mask, int size)
+cv::Mat ransam(cv::Mat mask, int size, cv::Rect bound)
 {
     vector<cv::Point2f> points;
     while (points.size() < size)
     {
-        int col = rand() % mask.cols;
-        int row = rand() % mask.rows;
+        int col = bound.x + rand() % bound.width;
+        int row = bound.y + rand() % bound.height;
         if (mask.at<uchar>(row, col) == 255)
         {
 			//Note that matrices are indexed (y,x) but points are still defined as (x, y)!!!
