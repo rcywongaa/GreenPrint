@@ -17,6 +17,7 @@ Distinguish table and chair based on size
 #define OFF_TIME 7
 #define MIN_UNCHANGED 10
 #define DIFF_THRESH 1.5
+#define MAX_FAILURES 1000
 
 #include "stdafx.h"
 #include "helper.h"
@@ -29,6 +30,12 @@ Distinguish table and chair based on size
 int _tmain(int argc, _TCHAR* argv[])
 {
 	MultithreadCam multicam;
+	if (!multicam.isInit())
+	{
+		cout << "Camera init failed! Rebooting in 10 secs..." << endl;
+		Sleep(10000);
+		rebootSystem();
+	}
 #ifdef SAVE
 	VideoRecorder recorder(&multicam);
 #endif
@@ -66,7 +73,7 @@ int _tmain(int argc, _TCHAR* argv[])
     RectFinder chair_finder(CHAIR_COLORS, cv::Scalar(0, 0, 255));
     RectFinder table_finder(TABLE_COLORS, cv::Scalar(255, 0, 0));
 
-
+	int num_failures = 0;
 
 #ifdef MANUAL
 	/*********************************************/
@@ -83,27 +90,34 @@ int _tmain(int argc, _TCHAR* argv[])
 #endif
 
 #ifdef DEBUG
-	cv::Scalar COLOR1 = cv::Scalar(150, 0, 50);
-	cv::Scalar COLOR2 = cv::Scalar(25, 75, 150);
-	setLight(curl, STUDY);
-	RectFinder test_finder(COLOR1, COLOR2);
+	Room test_room = STUDY;
+	setLight(curl, test_room);
+	RectFinder test_finder(TABLE_COLORS, cv::Scalar(0, 255, 0));
 	cv::Mat prev;
 	while(true)
 	{
 		cv::Mat f = multicam.getImage();
 		cv::Scalar mean = cv::mean(f,  getROIMask());
-		test_finder.process(f.clone());
+		test_finder.process(f.clone(), test_room);
 		cv::Mat curr = test_finder.drawColorRects();
 		show("rects", test_finder.drawColorRects());
 		if (!prev.empty()) cout << "diff = " << calculateDifference(prev, curr) << endl;
 		prev = curr.clone();
-		cv::waitKey(1);
+		cv::waitKey();
 	}
 #endif
 
 	while (true)
     {
 		int hour = getCurrentHour();
+		int minute = getCurrentMinute();
+
+		if (hour == 11 && minute == 59)
+		{
+			Sleep(60 * 1000);
+			rebootSystem();
+		}
+
 #ifdef TIMER
 		if (hour < START_TIME || hour >= END_TIME)
 		{
@@ -111,7 +125,7 @@ int _tmain(int argc, _TCHAR* argv[])
 			if (hour >= OFF_TIME && hour < START_TIME) setLight(curl, OFF);
 			else if (hour >= END_TIME || hour < OFF_TIME) setLight(curl, ON);
 #endif
-			cout << hour << endl;
+			cout << hour << ":" << minute << endl;
 			sound_controller.setRoom(OFF);
 			cout << "Disable detection!" << endl;
 			Sleep(1000 * 60); //wait 1 min
@@ -130,98 +144,152 @@ int _tmain(int argc, _TCHAR* argv[])
 #endif
 		}
 #endif
-		NowFrame = multicam.getImage();
-        table_finder.process(NowFrame, lastLighting);
-        chair_finder.process(NowFrame, lastLighting);
-        cv::Mat combinedFrame = chair_finder.drawColorRects();
-        combinedFrame = table_finder.drawColorRects(combinedFrame);
-
-		show("combined", combinedFrame);
-
-		cv::Mat grayFrame;
-		cv::cvtColor(combinedFrame, grayFrame, CV_BGR2GRAY);
-        //TODO: Check if this is necessary
-		if (cv::countNonZero(grayFrame) > 0)
+		
+		try
 		{
-			if (!lastFrame.empty())
-			{	
-				double diff = calculateDifference(combinedFrame, lastFrame);
-				cout << diff << endl;
-				if(diff < DIFF_THRESH)
-				{
-					stableFrames[numUnchanged % MIN_UNCHANGED] = combinedFrame;
-					numUnchanged++;
-					cout << "Number of unchanged frames = " << numUnchanged << endl;
-				}
-				else
-				{
-					numUnchanged = 0;
-					isProcessed = false;
-					cout << "Change detected: " << diff << endl;
-				}
-			}
-
-			// needProcess
-			if (numUnchanged >= MIN_UNCHANGED && isProcessed == false)
+			NowFrame = multicam.getImage();
+			if (NowFrame.empty())
 			{
-				cout << "numUnchanged = " << numUnchanged << endl;
-				cv::Mat averageFrame = cv::Mat::zeros(combinedFrame.size(), combinedFrame.type());
-				for (auto frame : stableFrames)
-				{
-					averageFrame += frame / stableFrames.size();
-				}
-				show("average", averageFrame);
-				if (!lastStableFrame.empty())
-				{
-					double diff = calculateDifference(lastStableFrame,averageFrame);
-					if ( diff > DIFF_THRESH / 2)
-					{
-						Room nowLighting = getSimilarRoom(averageFrame, vecRP);
-						if (nowLighting == UNDEFINED && lastLighting != UNDEFINED) nowLighting = lastLighting;
-						if (lastLighting != nowLighting)
-						{
-							cout<< getString(nowLighting) <<endl;
-							lastLighting = nowLighting;
-							sound_controller.setRoom(nowLighting);
-#ifdef LIGHT
-							setLight(curl, nowLighting);
-#endif
-						}
-						else
-						{
-							cout << "Equal to lastLighting" << endl;
-#ifdef LIGHT
-							setLight(curl, lastLighting);
-#endif
-						}
+				cout << "Failed to gete frame!" << endl;
+				continue;
+			}
+			table_finder.process(NowFrame, lastLighting);
+			chair_finder.process(NowFrame, lastLighting);
+			cv::Mat combinedFrame = chair_finder.drawColorRects();
+			combinedFrame = table_finder.drawColorRects(combinedFrame);
 
-						isProcessed = true;
-						lastStableFrame = averageFrame.clone();
+			show("combined", combinedFrame);
+
+			cv::Mat grayFrame;
+			cv::cvtColor(combinedFrame, grayFrame, CV_BGR2GRAY);
+			//TODO: Check if this is necessary
+			//if (cv::countNonZero(grayFrame) > 0)
+			{
+				if (!lastFrame.empty())
+				{	
+					double diff = calculateDifference(combinedFrame, lastFrame);
+					cout << diff << endl;
+					if(diff < DIFF_THRESH)
+					{
+						stableFrames[numUnchanged % MIN_UNCHANGED] = combinedFrame;
+						numUnchanged++;
+						cout << "Number of unchanged frames = " << numUnchanged << endl;
 					}
 					else
 					{
-						cout << "Similar to last stable frame" << endl;
+						numUnchanged = 0;
+						isProcessed = false;
+						cout << "Change detected: " << diff << endl;
 					}
 				}
-				else
+
+				// needProcess
+				if (numUnchanged >= MIN_UNCHANGED && isProcessed == false)
 				{
-					lastStableFrame = averageFrame.clone();
-					Room nowLighting = getSimilarRoom(averageFrame, vecRP);
-					lastLighting = nowLighting;
-					cout<< getString(nowLighting) <<endl;
-					sound_controller.setRoom(nowLighting);
-#ifdef LIGHT
-					setLight(curl, nowLighting);
-#endif
 					isProcessed = true;
-				}	
+					cv::Mat averageFrame = cv::Mat::zeros(combinedFrame.size(), combinedFrame.type());
+					for (auto frame : stableFrames)
+					{
+						averageFrame += frame / stableFrames.size();
+					}
+					//show("average", averageFrame);
+					if (!lastStableFrame.empty())
+					{
+						double diff = calculateDifference(lastStableFrame,averageFrame);
+						if ( diff > DIFF_THRESH / 2)
+						{
+							Room nowLighting = getSimilarRoom(averageFrame, vecRP);
+							if (nowLighting == UNDEFINED)
+							{
+								if  (lastLighting != UNDEFINED)
+								{
+									nowLighting = lastLighting;
+									setLight(curl, nowLighting);
+								}
+								else
+								{
+									lastLighting = ON;
+									setLight(curl, ON);
+								}
+							}
+							else //if (nowLighting != UNDEFINED)
+							{
+								cout << getString(nowLighting) << endl;
+								if (lastLighting != nowLighting)
+								{
+									sound_controller.setRoom(nowLighting);
+								}
+								else
+								{
+									cout << "Equal to lastLighting" << endl;
+								}
+								setLight(curl, nowLighting);
+								lastLighting = nowLighting;
+							}
+							lastLighting = nowLighting;
+							lastStableFrame = averageFrame.clone();
+						}
+						else //	if ( diff <= DIFF_THRESH / 2)
+						{
+							cout << "Similar to last stable frame" << endl;
+							setLight(curl, lastLighting);
+						}
+					}
+					else //if (lastStableFrame.empty())
+					{
+						lastStableFrame = averageFrame.clone();
+						Room nowLighting = getSimilarRoom(averageFrame, vecRP);
+						cout << getString(nowLighting) << endl;
+						sound_controller.setRoom(nowLighting);
+#ifdef LIGHT
+						setLight(curl, nowLighting);
+#endif
+						lastLighting = nowLighting;
+					}	
+				}
+				else if (numUnchanged > 50 && isProcessed == true)
+				{
+					cout << "Refresh..." << endl;
+					numUnchanged = 0;
+					setLight(curl, lastLighting);
+				}
 			}
+
+			lastFrame = combinedFrame.clone();
+ 			prevFrame = NowFrame.clone();
+			if(cv::waitKey(100) == 27) break;
+			num_failures = 0;
+		}
+		catch (cv::Exception exception)
+		{
+			cout << exception.msg << endl;
+			lastLighting = ON;
+			setLight(curl, lastLighting);
+			Sleep(1000);
+			num_failures++;
+		}
+		catch (std::exception exception)
+		{
+			cout << exception.what() << endl;
+			lastLighting = ON;
+			setLight(curl, lastLighting);
+			Sleep(1000);
+			num_failures++;
+		}
+		catch (...)
+		{
+			cout << "Unknown exception!" << endl;
+			lastLighting = ON;
+			setLight(curl, lastLighting);
+			Sleep(1000);
+			num_failures++;
 		}
 
-		lastFrame = combinedFrame.clone();
- 		prevFrame = NowFrame.clone();
-
-        if(cv::waitKey(100) == 27) break;
+		if (num_failures >= MAX_FAILURES)
+		{
+			cout << "Too many failures, rebooting!" << endl;
+			rebootSystem();
+		}
     }
     cout << endl;
 	cout << "Finished grabbing images" << endl; 

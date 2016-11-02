@@ -1,6 +1,6 @@
 #include "RectFinder.h"
 
-#define DEBUG
+//#define DEBUG
 #define WATERSHED
 //#define GRABCUT //Too slow
 
@@ -117,6 +117,9 @@ cv::Mat RectFinder::drawColorRects(cv::Mat original)
         this_rect_frame = drawRotatedRect(this_rect_frame, rect, m_color);
 		cv::max(this_rect_frame, output, output);
 	}
+#ifdef DEBUG
+	show("rects", output);
+#endif
 	return output;
 }
 
@@ -134,29 +137,26 @@ cv::Mat RectFinder::findColor(cv::Mat input, Room room)
 	show("v", hsv_array[2]);
 #endif
     int hour = getCurrentHour();
-    if (hour == 19)
-    {
-        cv::inRange(hsv, get<0>(m_color_ranges[ON]), get<1>(m_color_ranges[ON]), mask);
-    }
-    else
-    {
-		cv::Scalar color1 = get<0>(m_color_ranges[room]);
-		cv::Scalar color2 = get<1>(m_color_ranges[room]);
-		if (color1[0] > color2[0])
-		{
-			cv::Scalar upper(255, color2[1], color2[2]);
-			cv::Scalar lower(0, color1[1], color1[2]);
-			cv::Mat temp_mask_upper;
-			cv::Mat temp_mask_lower;
-			cv::inRange(hsv, color1, upper, temp_mask_upper);
-			cv::inRange(hsv, lower, color2, temp_mask_lower);
-			cv::bitwise_or(temp_mask_lower, temp_mask_upper, mask);
-		}
-		else
-		{
-			cv::inRange(hsv, get<0>(m_color_ranges[room]), get<1>(m_color_ranges[room]), mask);
-		}
-    }
+    
+	cv::Scalar color1 = get<0>(m_color_ranges[room]);
+	cv::Scalar color2 = get<1>(m_color_ranges[room]);
+	//cout << "color1 = " << color1 << endl;
+	//cout << "color2 = " << color2 << endl;
+	if (color1[0] > color2[0])
+	{
+		cv::Scalar upper(255, color2[1], color2[2]);
+		cv::Scalar lower(0, color1[1], color1[2]);
+		cv::Mat temp_mask_upper;
+		cv::Mat temp_mask_lower;
+		cv::inRange(hsv, color1, upper, temp_mask_upper);
+		cv::inRange(hsv, lower, color2, temp_mask_lower);
+		cv::bitwise_or(temp_mask_lower, temp_mask_upper, mask);
+	}
+	else
+	{
+		cv::inRange(hsv, get<0>(m_color_ranges[room]), get<1>(m_color_ranges[room]), mask);
+	}
+    
 	cv::bitwise_and(mask, getROIMask(), mask);
 #ifdef DEBUG
 	show("mask", mask);
@@ -173,29 +173,41 @@ cv::Mat RectFinder::findForeground(cv::Mat input, cv::Mat mask)
     cv::distanceTransform(mask, dist_mask, CV_DIST_L2, CV_32F);
 	cv::Mat dist_mask_8u;
 	dist_mask.convertTo(dist_mask_8u, CV_8U);
+#ifdef DEBUG
 	show("dist", dist_mask_8u);
+#endif
     cv::Mat fg;
     cv::threshold(dist_mask_8u, fg, MIN_DIST, FG_MARKER, CV_THRESH_BINARY);
     vector<vector<cv::Point>> contours;
 	vector<cv::Vec4i> contour_hierarchy;
 	cv::findContours(fg.clone(), contours, contour_hierarchy, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
+#ifdef DEBUG
+	show("fg", fg);
+#endif
 
     //cv::findContours(fg, contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_SIMPLE);
     cv::Mat bg;
     cv::dilate(mask, bg, cv::Mat(), cv::Point(-1, -1), 10);
     cv::bitwise_not(bg, bg);
     bg = cv::min(bg, BG_MARKER);
+#ifdef DEBUG
+	show("bg", bg);
+#endif
 #ifdef WATERSHED
     cv::Mat markers = bg;
     for (int i = 0; i < contours.size(); i++)
     {
         drawContours(markers, contours, i, cv::Scalar::all(FG_MARKER + i), -1);
     }
-    //show("markers", markers);
+#ifdef DEBUG
+    show("markers", markers);
+#endif
 	markers.convertTo(markers, CV_32SC1);
     cv::watershed(input, markers);
 	markers.convertTo(markers, CV_8UC1);
-    //show("watershed", markers);
+#ifdef DEBUG
+    show("watershed", markers);
+#endif
 #endif
 #ifdef GRABCUT
     cv::Mat bgdModel;
@@ -257,7 +269,6 @@ vector<cv::RotatedRect> RectFinder::findBinaryRects(cv::Mat mask)
 
 		cv::RotatedRect rect;
 		rect = cv::minAreaRect(polygon);
-		//TODO: Pass RotatedRect to findBestFitRect() to speed up sampling
 		cv::RotatedRect bestfit_rect = findBestFitRect(mask, cv::boundingRect(cv::Mat(polygon)));
 
 		if (bestfit_rect.size.width > MIN_DIM && bestfit_rect.size.height > MIN_DIM && getFillRate(getRotatedRectROI(mask, bestfit_rect)) > FILL_THRESH)
@@ -320,8 +331,8 @@ cv::Mat ransam(cv::Mat mask, int size, cv::Rect bound)
     vector<cv::Point2f> points;
     while (points.size() < size)
     {
-        int col = bound.x + rand() % bound.width;
-        int row = bound.y + rand() % bound.height;
+        int col = min((bound.x + rand() % bound.width), mask.size().width);
+        int row = min((bound.y + rand() % bound.height), mask.size().height);
         if (mask.at<uchar>(row, col) == 255)
         {
 			//Note that matrices are indexed (y,x) but points are still defined as (x, y)!!!

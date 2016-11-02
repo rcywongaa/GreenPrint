@@ -6,7 +6,7 @@ VideoRecorder::VideoRecorder(MultithreadCam* cam)
 	num_frames = 0;
 	FRAME_RATE = 2;
 	DURATION = 24*60*60/FRAME_RATE; //seconds
-	MAX_NUM_RECORDS = 14;
+	MAX_NUM_RECORDS = 365;
 	FONT_SIZE = 2;
 	ISCOLOR = true;
 	CODEC = cv::VideoWriter::fourcc('F', 'M', 'P', '4');
@@ -50,7 +50,7 @@ void VideoRecorder::recordCont()
 		curr_time = time(NULL);
 		if (curr_time - prev_time >= 1)
 		{
-			cv::Mat NowFrame = m_cam->getImage(false);
+			cv::Mat NowFrame = m_cam->getImage();
 			cv::cvtColor(NowFrame, NowFrame, CV_RGB2BGR);
 			cv::Mat saveFrame;
 			cv::resize(NowFrame, saveFrame, SAVE_FRAME_SIZE);

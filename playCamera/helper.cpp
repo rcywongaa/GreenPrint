@@ -1,5 +1,7 @@
 #include "helper.h"
 #include "CmFile.h"
+#include <windows.h>
+#include <stdio.h>
 
 #define MIN_ROOM_SCORE 0.4
 
@@ -15,27 +17,27 @@ void initializeColors()
 	cv::Scalar CHAIR_COLOR2_1800(35, 125, 100);
 	*/
 
-	cv::Scalar TABLE_COLOR1_1900(0, 0, 0);
-	cv::Scalar TABLE_COLOR2_1900(50, 75, 150);
-	cv::Scalar CHAIR_COLOR1_1900(50, 0, 0);
+	cv::Scalar TABLE_COLOR1_1900(50, 0, 0);
+	cv::Scalar TABLE_COLOR2_1900(125, 100, 50);
+	cv::Scalar CHAIR_COLOR1_1900(50, 0, 50);
 	cv::Scalar CHAIR_COLOR2_1900(125, 75, 150);
 	//Living
-	cv::Scalar LIVING_TABLE_COLOR1(0, 125, 100);
-	cv::Scalar LIVING_TABLE_COLOR2(10, 200, 225);
+	cv::Scalar LIVING_TABLE_COLOR1(0, 50, 0);
+	cv::Scalar LIVING_TABLE_COLOR2(20, 125, 75);
 	cv::Scalar LIVING_CHAIR_COLOR1(0, 125, 75);
-	cv::Scalar LIVING_CHAIR_COLOR2(15, 175, 175);
+	cv::Scalar LIVING_CHAIR_COLOR2(15, 175, 200);
 
 	//Dining
-	cv::Scalar DINING_TABLE_COLOR1(0, 125, 125);
-	cv::Scalar DINING_TABLE_COLOR2(10, 200, 225);
+	cv::Scalar DINING_TABLE_COLOR1(0, 0, 0);
+	cv::Scalar DINING_TABLE_COLOR2(10, 100, 75);
 	cv::Scalar DINING_CHAIR_COLOR1(0, 100, 75);
 	cv::Scalar DINING_CHAIR_COLOR2(10, 175, 175);
 
 	//Study
-	cv::Scalar STUDY_TABLE_COLOR1(0, 50, 0);
-	cv::Scalar STUDY_TABLE_COLOR2(25, 100, 200);
-	cv::Scalar STUDY_CHAIR_COLOR1(150, 0, 50);
-	cv::Scalar STUDY_CHAIR_COLOR2(25, 50, 150);
+	cv::Scalar STUDY_TABLE_COLOR1(75, 0, 0);
+	cv::Scalar STUDY_TABLE_COLOR2(150, 75, 75);
+	cv::Scalar STUDY_CHAIR_COLOR1(150, 0, 25);
+	cv::Scalar STUDY_CHAIR_COLOR2(25, 50, 125);
 
 	CHAIR_COLORS = vector<tuple<cv::Scalar, cv::Scalar>>(NUM_ROOMS);
 	TABLE_COLORS = vector<tuple<cv::Scalar, cv::Scalar>>(NUM_ROOMS);
@@ -328,7 +330,7 @@ Room getSimilarRoom(cv::Mat &img, vector<RoomPhotos> &vecRP)
 	}
 	else
 	{
-		show("most_similar", cv::Mat(maxRP.img.get_MAT()));
+		//show("most_similar", cv::Mat(maxRP.img.get_MAT()));
 		return maxRP.room;
 	}
 }

@@ -10,16 +10,15 @@ public:
 	MultithreadCam();
 	~MultithreadCam(void);
 	cv::Mat getImage();
-	cv::Mat getImage(bool isBright);
 	cv::Size getImageSize();
 	void setShutter(bool isBright);
     void stop();
+	bool isInit();
 private:
 	FlyCapture2::GigECamera *m_cam;
 	cv::Size m_image_size;
 	std::mutex readLock;
 	std::mutex modeLock;
-	bool m_isBright;
 };
 
 int CheckError(FlyCapture2::Error error);

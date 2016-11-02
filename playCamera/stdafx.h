@@ -58,5 +58,8 @@ string getString(Room room);
 vector<cv::Point2f> getROIPts2f();
 string getCurrentTime();
 int getCurrentHour();
+int getCurrentMinute();
 cv::Mat getROIMask();
 void show(string window, cv::Mat img);
+void rebootSystem();
+//BOOL SetPrivilege(HANDLE hToken, LPCTSTR lpszPrivilege, BOOL bEnablePrivilege);

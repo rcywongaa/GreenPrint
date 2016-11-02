@@ -5,11 +5,12 @@ using namespace FlyCapture2;
 MultithreadCam::MultithreadCam()
 {
     m_cam = setupCam();
-    GigEImageSettings imageSettings;
-    CheckError(m_cam->GetGigEImageSettings(&imageSettings));
-    m_image_size = cv::Size(imageSettings.width, imageSettings.height);
-    m_isBright = false;
-    //setShutter(m_isBright);
+	if (m_cam != NULL)
+	{
+		GigEImageSettings imageSettings;
+		CheckError(m_cam->GetGigEImageSettings(&imageSettings));
+		m_image_size = cv::Size(imageSettings.width, imageSettings.height);
+	}
 }
 
 
@@ -30,24 +31,6 @@ cv::Mat MultithreadCam::getImage()
     readLock.unlock();
     cv::cvtColor(NowFrame, NowFrame, CV_RGB2BGR);
     return NowFrame.clone();
-}
-
-cv::Mat MultithreadCam::getImage(bool isBright)
-{
-    modeLock.lock();
-    //cout << "locking modeLock" << endl;
-    //cout << "isBright = " << isBright << endl;
-    if (m_isBright != isBright)
-    {
-        m_isBright = isBright;
-        setShutter(isBright);
-    }
-    cv::Mat ret = getImage();
-
-    //cout << "m_isBright = " << m_isBright << endl;
-    //cout << "unlocking modeLock" << endl;
-    modeLock.unlock();
-    return ret;
 }
 
 void MultithreadCam::setShutter(bool isBright)
@@ -74,6 +57,11 @@ void MultithreadCam::stop()
 
     // Disconnect the camera
     CheckError(m_cam->Disconnect());
+}
+
+bool MultithreadCam::isInit()
+{
+	return (m_cam != NULL);
 }
 
 
@@ -145,8 +133,8 @@ GigECamera* setupCam()
     if ( numCameras < 1 )
     {
         cout << "Insufficient number of cameras... exiting" << endl;
-        system("pause");
-    }
+		return NULL;
+	}
 
     PGRGuid guid;
     CheckError(busMgr.GetCameraFromIndex(0, &guid));

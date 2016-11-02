@@ -50,6 +50,14 @@ int getCurrentHour()
     return hour;
 }
 
+int getCurrentMinute()
+{
+    time_t curr_time = time(NULL);
+    tm* curr_time_tm = localtime(&curr_time);
+	int minute = curr_time_tm->tm_min;
+    return minute;
+}
+
 void show(string window, cv::Mat img)
 {
 	cv::Mat resized;
@@ -67,3 +75,69 @@ cv::Mat getROIMask()
 	//show("roi mask", mask);
 	return mask;
 }
+
+void rebootSystem()
+{
+	system("c:\\windows\\system32\\shutdown /r /f /t 0\n\n");
+	/*
+	PHANDLE token;
+	OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, token);
+	SetPrivilege(*token, SE_SHUTDOWN_NAME, true);
+	InitiateSystemShutdown(NULL, NULL, 0, SHUTDOWN_RESTART, SHTDN_REASON_MAJOR_APPLICATION);
+	//ExitWindowsEx(EWX_REBOOT, SHTDN_REASON_MAJOR_APPLICATION);
+	*/
+}
+
+
+/*
+#pragma comment(lib, "cmcfg32.lib")
+
+BOOL SetPrivilege(
+    HANDLE hToken,          // access token handle
+    LPCTSTR lpszPrivilege,  // name of privilege to enable/disable
+    BOOL bEnablePrivilege   // to enable or disable privilege
+    ) 
+{
+    TOKEN_PRIVILEGES tp;
+    LUID luid;
+
+    if ( !LookupPrivilegeValue( 
+            NULL,            // lookup privilege on local system
+            lpszPrivilege,   // privilege to lookup 
+            &luid ) )        // receives LUID of privilege
+    {
+        printf("LookupPrivilegeValue error: %u\n", GetLastError() ); 
+        return FALSE; 
+    }
+
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Luid = luid;
+    if (bEnablePrivilege)
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    else
+        tp.Privileges[0].Attributes = 0;
+
+    // Enable the privilege or disable all privileges.
+
+    if ( !AdjustTokenPrivileges(
+           hToken, 
+           FALSE, 
+           &tp, 
+           sizeof(TOKEN_PRIVILEGES), 
+           (PTOKEN_PRIVILEGES) NULL, 
+           (PDWORD) NULL) )
+    { 
+          printf("AdjustTokenPrivileges error: %u\n", GetLastError() ); 
+          return FALSE; 
+    } 
+
+    if (GetLastError() == ERROR_NOT_ALL_ASSIGNED)
+
+    {
+          printf("The token does not have the specified privilege. \n");
+          return FALSE;
+    } 
+
+    return TRUE;
+}
+*/
